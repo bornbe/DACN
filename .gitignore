@@ -1,0 +1,3 @@
+# scannerweb structure created from owasp_scanner_web_fake.txt
+.env
+.env.example
