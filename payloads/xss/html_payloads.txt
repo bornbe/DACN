@@ -1,0 +1,3 @@
+# Tệp lưu trữ chuỗi Canary kiểm tra phản chiếu ngữ cảnh HTML (Safe Reflection Canary Tokens)
+SCANNER_XSS_HTML_CANARY_7f8a9b
+SCANNER_XSS_ATTR_CANARY_3c4d5e

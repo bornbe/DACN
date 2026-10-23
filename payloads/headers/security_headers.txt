@@ -1,0 +1,9 @@
+# Danh mục kiểm tra HTTP Security Headers theo chuẩn OWASP Secure Headers Project
+# Định dạng: HEADER_NAME | SEVERITY | CWE_ID | RECOMMENDED_VALUE | REMEDIATION
+
+Strict-Transport-Security | MEDIUM | CWE-319 | max-age=31536000; includeSubDomains | Bổ sung header Strict-Transport-Security để bắt buộc trình duyệt kết nối qua HTTPS.
+Content-Security-Policy | MEDIUM | CWE-693 | default-src 'self' | Thiết lập chính sách Content-Security-Policy (CSP) chặt chẽ nhằm giảm thiểu nguy cơ XSS và Data Injection.
+X-Frame-Options | LOW | CWE-1021 | DENY hoặc SAMEORIGIN | Cấu hình X-Frame-Options là DENY hoặc SAMEORIGIN để phòng chống tấn công Clickjacking.
+X-Content-Type-Options | LOW | CWE-693 | nosniff | Bổ sung header X-Content-Type-Options: nosniff để ngăn trình duyệt tự ý đoán kiểu MIME.
+Referrer-Policy | INFO | CWE-200 | strict-origin-when-cross-origin | Thiết lập Referrer-Policy để kiểm soát thông tin URL nguồn gửi kèm trong header Referer.
+Permissions-Policy | INFO | CWE-693 | geolocation=(), microphone=(), camera=() | Giới hạn quyền truy cập các API nhạy cảm của trình duyệt thông qua Permissions-Policy.

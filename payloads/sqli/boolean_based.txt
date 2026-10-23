@@ -1,0 +1,3 @@
+# Tệp lưu trữ cặp mẫu đối chiếu trạng thái phản hồi (Safe Baseline Comparison Probes)
+# Định dạng: BASELINE_TRUE_PROBE ||| BASELINE_FALSE_PROBE
+SCANNER_BOOL_BASELINE_A ||| SCANNER_BOOL_BASELINE_B

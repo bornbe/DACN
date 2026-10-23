@@ -1,0 +1,51 @@
+{
+  "version": "OWASP Top 10 - 2021 / 2025 Standard Catalog",
+  "categories": {
+    "sqli": {
+      "owasp_id": "A03:2021-Injection",
+      "cwe_id": "CWE-89",
+      "name": "SQL Injection",
+      "default_severity": "HIGH",
+      "remediation": "Sử dụng Prepared Statements (Parameterized Queries) hoặc ORM an toàn; kiểm tra kiểu dữ liệu đầu vào nghiêm ngặt.",
+      "error_signatures": [
+        "SQL syntax.*MySQL",
+        "Warning.*mysql_",
+        "PostgreSQL.*ERROR",
+        "Driver.* SQL[\\-\\_\\ ]*Server",
+        "ORA-[0-9]{5}",
+        "SQLite/JDBCDriver",
+        "sqlite3\\.OperationalError"
+      ]
+    },
+    "xss": {
+      "owasp_id": "A03:2021-Injection",
+      "cwe_id": "CWE-79",
+      "name": "Reflected Cross-Site Scripting (XSS)",
+      "default_severity": "MEDIUM",
+      "remediation": "Mã hóa đầu ra theo ngữ cảnh (Context-aware Output Encoding), lọc dữ liệu đầu vào và triển khai Content-Security-Policy (CSP)."
+    },
+    "csrf": {
+      "owasp_id": "A01:2021-Broken Access Control",
+      "cwe_id": "CWE-352",
+      "name": "Cross-Site Request Forgery (Anti-CSRF Token Missing)",
+      "default_severity": "MEDIUM",
+      "remediation": "Tích hợp Anti-CSRF Token ngẫu nhiên gắn với phiên làm việc cho mọi biểu mẫu POST/PUT/DELETE và sử dụng thuộc tính SameSite cho Cookie.",
+      "recognized_token_names": [
+        "csrf_token",
+        "_csrf",
+        "csrfmiddlewaretoken",
+        "authenticity_token",
+        "__requestverificationtoken",
+        "_token",
+        "xsrf_token"
+      ]
+    },
+    "security_headers": {
+      "owasp_id": "A05:2021-Security Misconfiguration",
+      "cwe_id": "CWE-693",
+      "name": "Security Headers Misconfiguration",
+      "default_severity": "LOW",
+      "remediation": "Cấu hình đầy đủ các HTTP Response Headers bảo mật trên Web Server hoặc Reverse Proxy (HSTS, CSP, X-Frame-Options, X-Content-Type-Options)."
+    }
+  }
+}
