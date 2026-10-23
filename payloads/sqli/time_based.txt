@@ -1,0 +1,2 @@
+# Tệp lưu trữ mẫu đo độ trễ phản hồi (Safe Latency Baseline Probes)
+SCANNER_LATENCY_PROBE_01

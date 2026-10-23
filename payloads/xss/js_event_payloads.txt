@@ -1,0 +1,2 @@
+# Tệp lưu trữ chuỗi Canary kiểm tra phản chiếu ngữ cảnh thuộc tính/sự kiện (Safe Reflection Canary Tokens)
+SCANNER_XSS_EVENT_CANARY_1a2b3c

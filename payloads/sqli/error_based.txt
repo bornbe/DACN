@@ -1,0 +1,4 @@
+# Tệp lưu trữ các chuỗi đánh dấu chẩn đoán (Safe Diagnostic Canary Probes) cho kiểm thử Error-based
+# Lưu ý: Chỉ sử dụng các chuỗi canary định danh an toàn để kiểm tra hành vi xử lý đầu vào trong môi trường Lab.
+SCANNER_SQLI_ERROR_CANARY_01
+SCANNER_SQLI_ERROR_CANARY_02
