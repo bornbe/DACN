@@ -70,6 +70,8 @@ class BFSCrawler:
         self.form_parser = FormParser(self.url_parser)
 
         self.visited: set[str] = set()
+        # 'seen' gồm mọi URL ĐÃ hoặc ĐANG nằm trong hàng đợi -> chống nạp trùng vào queue
+        self.seen: set[str] = set()
         self._endpoint_signatures: set[str] = set()
         self.endpoints: list[EndpointDescriptor] = []
 
@@ -79,6 +81,7 @@ class BFSCrawler:
         bóc tách endpoint và nạp các liên kết con hợp lệ vào hàng đợi.
         """
         queue: deque[tuple[str, int]] = deque([(self.base_url, 0)])
+        self.seen.add(self.base_url)
 
         while queue and len(self.visited) < self.max_pages:
             current_url, depth = queue.popleft()
@@ -103,7 +106,8 @@ class BFSCrawler:
             # 3) Mở rộng BFS: nạp các liên kết con nếu chưa vượt quá độ sâu tối đa
             if depth < self.max_depth:
                 for link in self._extract_links(html, current_url):
-                    if link not in self.visited:
+                    if link not in self.seen:
+                        self.seen.add(link)
                         queue.append((link, depth + 1))
 
         return CrawlResult(

@@ -36,7 +36,8 @@ class URLParser:
         parsed = urlparse(normalized)
         self.base_url: str = normalized
         self.base_scheme: str = parsed.scheme or "http"
-        self.base_host: str = parsed.netloc.lower()
+        # Dùng hostname (bỏ cổng :port và thông tin user) thay cho netloc để so khớp chính xác
+        self.base_host: str = (parsed.hostname or "").lower()
 
     @staticmethod
     def normalize(url: str) -> str:
@@ -76,11 +77,17 @@ class URLParser:
         return absolute
 
     def is_in_scope(self, url: str) -> bool:
-        """Kiểm tra URL có nằm trong phạm vi (cùng Hostname với mục tiêu) hay không."""
+        """
+        Kiểm tra URL có nằm trong phạm vi (cùng Hostname với mục tiêu) hay không.
+        Chấp nhận khác biệt ở tiền tố 'www.' (vd: example.com và www.example.com).
+        """
         parsed = urlparse(url)
         if parsed.scheme not in self.ALLOWED_SCHEMES:
             return False
-        return parsed.netloc.lower() == self.base_host
+        host = (parsed.hostname or "").lower()
+        if not host:
+            return False
+        return host == self.base_host or host.removeprefix("www.") == self.base_host.removeprefix("www.")
 
     def is_crawlable(self, url: str) -> bool:
         """Loại bỏ các liên kết trỏ tới tài nguyên tĩnh (ảnh, css, js, tài liệu...)."""
