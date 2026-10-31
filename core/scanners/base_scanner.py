@@ -97,6 +97,13 @@ class BaseScanner(ABC):
         """Kiểm thử một endpoint và trả về danh sách phát hiện."""
         raise NotImplementedError
 
+    def reset(self) -> None:
+        """
+        Đặt lại trạng thái theo phiên quét (cache, tập đã kiểm tra...). Engine gọi ở đầu
+        mỗi lần quét để scanner tái sử dụng không mang trạng thái từ phiên trước.
+        Mặc định không làm gì; scanner có trạng thái cần ghi đè.
+        """
+
     def safe_scan(self, endpoint: "EndpointDescriptor") -> list[Finding]:
         """Chạy `scan()` và nuốt mọi ngoại lệ (ghi log) để tiến trình quét chính không bị sập."""
         try:

@@ -39,6 +39,11 @@ class SecurityHeadersScanner(BaseScanner):
         except Exception:  # noqa: BLE001 - thiếu tệp cấu hình thì dùng giá trị mặc định
             self._specs = {}
 
+    def reset(self) -> None:
+        """Bắt đầu phiên quét mới: xóa tập Origin đã kiểm tra (dưới lock để an toàn đa luồng)."""
+        with self._lock:
+            self._checked_origins.clear()
+
     def scan(self, endpoint: "EndpointDescriptor") -> list[Finding]:
         parsed = urlparse(endpoint.url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:

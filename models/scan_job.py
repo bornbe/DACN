@@ -29,6 +29,7 @@ class ScanStatus(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    NO_MODULES = "NO_MODULES"
 
 
 class ScanTarget(Base, TimestampMixin):
