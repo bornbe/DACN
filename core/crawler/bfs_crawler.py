@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import urljoin
 
 import requests
 
@@ -19,6 +20,14 @@ from core.crawler.url_parser import URLParser
 
 # Hàm callback báo tiến độ: nhận (số trang đã quét, URL hiện tại)
 ProgressCallback = Callable[[int, str], None]
+
+# Số lần chuyển hướng tối đa được theo (mỗi bước đều kiểm tra phạm vi)
+MAX_REDIRECTS = 5
+# Content-Type chấp nhận là HTML
+HTML_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
+# Content-Type thiếu/chung chung: phải đoán (sniff) nội dung thay vì bỏ qua trang
+AMBIGUOUS_CONTENT_TYPES = frozenset({"", "text/plain", "application/octet-stream", "unknown/unknown"})
+HTML_SNIFF_MARKERS = ("<html", "<!doctype html", "<head", "<body", "<a ", "<form", "<div", "<title")
 
 
 @dataclass
@@ -79,6 +88,7 @@ class BFSCrawler:
         bóc tách endpoint và nạp các liên kết con hợp lệ vào hàng đợi.
         """
         queue: deque[tuple[str, int]] = deque([(self.base_url, 0)])
+        queued: set[str] = {self.base_url}
 
         while queue and len(self.visited) < self.max_pages:
             current_url, depth = queue.popleft()
@@ -87,23 +97,29 @@ class BFSCrawler:
                 continue
             self.visited.add(current_url)
 
-            html = self._fetch(current_url)
-            if self.on_progress:
-                self.on_progress(len(self.visited), current_url)
-            if html is None:
-                continue
-
-            # 1) Ghi nhận endpoint GET nếu URL hiện tại có tham số truy vấn
+            # 1) Ghi nhận endpoint GET nếu URL có tham số truy vấn (kể cả khi trang trả lỗi/không phải HTML,
+            #    vì tham số vẫn là bề mặt tấn công)
             self._collect_query_endpoint(current_url, depth)
 
-            # 2) Bóc tách các form trong trang thành endpoint
-            for endpoint in self.form_parser.parse_forms(html, current_url, depth):
+            page = self._fetch_page(current_url)
+            if self.on_progress:
+                self.on_progress(len(self.visited), current_url)
+            if page is None:
+                continue
+            html, page_url = page
+
+            # URL cuối sau chuyển hướng cũng được đánh dấu đã thăm để không tải lại
+            self.visited.add(self.url_parser.normalize(page_url))
+
+            # 2) Bóc tách các form trong trang thành endpoint (dùng URL thật của trang để giải mã link tương đối)
+            for endpoint in self.form_parser.parse_forms(html, page_url, depth):
                 self._add_endpoint(endpoint)
 
             # 3) Mở rộng BFS: nạp các liên kết con nếu chưa vượt quá độ sâu tối đa
             if depth < self.max_depth:
-                for link in self._extract_links(html, current_url):
-                    if link not in self.visited:
+                for link in self._extract_links(html, page_url):
+                    if link not in self.visited and link not in queued:
+                        queued.add(link)
                         queue.append((link, depth + 1))
 
         return CrawlResult(
@@ -118,17 +134,59 @@ class BFSCrawler:
         mã trạng thái không hợp lệ hoặc nội dung không phải HTML.
         Bắt ngoại lệ mềm mại để không làm sập toàn bộ tiến trình crawl.
         """
-        try:
-            response = self.session.get(url, timeout=self.timeout, allow_redirects=True)
-        except requests.RequestException:
+        page = self._fetch_page(url)
+        return page[0] if page else None
+
+    def _fetch_page(self, url: str) -> tuple[str, str] | None:
+        """
+        Tải trang và trả về (html, url thật của trang) hoặc None.
+        Chuyển hướng được theo thủ công từng bước và bị dừng nếu rời khỏi phạm vi mục tiêu,
+        tránh crawl sang domain ngoài scope.
+        """
+        current = url
+        response: requests.Response | None = None
+        for _ in range(MAX_REDIRECTS + 1):
+            try:
+                response = self.session.get(current, timeout=self.timeout, allow_redirects=False)
+            except (requests.RequestException, ValueError):
+                return None
+
+            location = response.headers.get("Location") if response.is_redirect else None
+            if not location:
+                break
+            try:
+                target = urljoin(current, location.strip())
+                in_scope = self.url_parser.is_in_scope(target)
+            except ValueError:
+                return None
+            if not in_scope:
+                return None
+            current = target
+        else:
+            return None  # vượt quá số lần chuyển hướng cho phép
+
+        if response is None or response.status_code >= 400:
             return None
 
-        if response.status_code >= 400:
-            return None
         content_type = response.headers.get("Content-Type", "").lower()
-        if "html" not in content_type:
-            return None
-        return response.text
+        media_type = content_type.split(";")[0].strip()
+        if "charset" not in content_type:
+            # Không khai báo charset: requests mặc định ISO-8859-1 gây lỗi font, nên đoán từ nội dung
+            response.encoding = response.apparent_encoding or response.encoding
+
+        if media_type in HTML_CONTENT_TYPES:
+            return response.text, current
+        if media_type in AMBIGUOUS_CONTENT_TYPES:
+            text = response.text
+            if self._looks_like_html(text):
+                return text, current
+        return None
+
+    @staticmethod
+    def _looks_like_html(text: str) -> bool:
+        """Đoán nội dung là HTML khi Content-Type thiếu hoặc không chuẩn."""
+        head = text[:2048].lower()
+        return any(marker in head for marker in HTML_SNIFF_MARKERS)
 
     def _collect_query_endpoint(self, url: str, depth: int) -> None:
         """Nếu URL chứa query string, tạo một EndpointDescriptor phương thức GET."""
