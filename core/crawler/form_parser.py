@@ -14,8 +14,8 @@ from bs4 import BeautifulSoup
 if TYPE_CHECKING:
     from core.crawler.url_parser import URLParser
 
-# Các method HTTP chấp nhận cho form (method khác không hợp lệ -> trình duyệt xử lý như GET)
-VALID_FORM_METHODS: frozenset[str] = frozenset({"GET", "POST", "PUT", "DELETE", "PATCH"})
+# Form HTML chỉ hỗ trợ GET/POST; method khác được trình duyệt xử lý như GET.
+VALID_FORM_METHODS: frozenset[str] = frozenset({"GET", "POST"})
 # Giá trị method override (hidden `_method`) làm form POST thực chất thay đổi trạng thái theo method khác
 OVERRIDE_METHODS: frozenset[str] = frozenset({"PUT", "DELETE", "PATCH"})
 

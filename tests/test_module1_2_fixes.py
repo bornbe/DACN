@@ -127,6 +127,36 @@ class TestAtRestStorage(unittest.TestCase):
         self.assertEqual(self.db.get(CrawledEndpoint, ep.id).params_schema, {"csrf_token": "SuperSecretValue123"})
         self.assertIn("secret.internal", self.db.get(ScanSession, session.id).error_message)
 
+    def test_vulnerability_sensitive_fields_encrypted(self) -> None:
+        target = ScanTarget(name="t", url="http://a")
+        self.db.add(target)
+        self.db.flush()
+        session = ScanSession(target_id=target.id)
+        self.db.add(session)
+        self.db.flush()
+        finding = VulnerabilityFinding(
+            session_id=session.id,
+            vuln_type="SQL Injection",
+            target_url="http://internal.test/search",
+            payload="'",
+            evidence="database error detail",
+            param="q",
+        )
+        self.db.add(finding)
+        self.db.commit()
+
+        raw_url, raw_payload, raw_evidence = self.raw(
+            "SELECT target_url, payload, evidence FROM vulnerability_findings WHERE id = :i",
+            i=finding.id,
+        )
+        self.assertNotIn("internal.test", raw_url)
+        self.assertNotEqual(raw_payload, "'")
+        self.assertNotIn("database error detail", raw_evidence)
+        restored = self.db.get(VulnerabilityFinding, finding.id)
+        self.assertEqual(restored.target_url, "http://internal.test/search")
+        self.assertEqual(restored.payload, "'")
+        self.assertEqual(restored.evidence, "database error detail")
+
     def test_fingerprint_is_keyed_hmac_not_plain_sha256(self) -> None:
         args = dict(session_id=1, vuln_type="XSS", target_url="http://a/x", param="q")
         fp = VulnerabilityFinding.compute_fingerprint(**args)
@@ -190,9 +220,17 @@ class TestURLParser(unittest.TestCase):
     def test_malformed_links_do_not_raise(self) -> None:
         p = URLParser("http://example.com/")
         self.assertIsNone(p.to_absolute("http://[invalid", "http://example.com/"))
+        self.assertIsNone(p.to_absolute("http://example.com:invalid/", "http://example.com/"))
         self.assertFalse(p.is_in_scope("http://[invalid"))
         self.assertIsNone(p.to_absolute("javascript:void(0)", "http://example.com/"))
         self.assertIsNone(p.to_absolute("ftp://example.com/x", "http://example.com/"))
+
+    def test_relative_link_resolution_ignores_current_query(self) -> None:
+        p = URLParser("http://example.com/")
+        self.assertEqual(
+            p.to_absolute("detail", "http://example.com/blog/?page=2"),
+            "http://example.com/blog/detail",
+        )
 
     def test_static_resources_skipped(self) -> None:
         p = URLParser("http://example.com/")
@@ -240,6 +278,10 @@ class TestFormParser(unittest.TestCase):
         self.assertEqual(ep.params["c"], "on")
         self.assertEqual(ep.params["ext"], "9")
 
+    def test_non_html_form_method_defaults_to_get(self) -> None:
+        ep = self.parse('<form method="PUT"><input name="id" value="1"></form>')[0]
+        self.assertEqual(ep.method, "GET")
+
     def test_out_of_scope_action_skipped(self) -> None:
         self.assertEqual(self.parse('<form action="http://evil.com/x" method="post"></form>'), [])
 
@@ -262,7 +304,7 @@ class CrawlHandler(BaseHTTPRequestHandler):
             "/": (200, [("Content-Type", html)], (
                 '<a href="/blog/">b</a><a href="/api?id=1">a</a><a href="/err?id=2">e</a>'
                 '<a href="http://[bad">x</a><a href="/redir-out">r</a><a href="/redir-in">r</a>'
-                '<a href="/xhtml">x</a><a href="/noct">n</a><a href="/static.png">s</a>'
+                '<a href="/xhtml">x</a><a href="/xhtmlish">u</a><a href="/noct">n</a><a href="/static.png">s</a>'
                 f'<a href="http://localhost:{port}/leak">l</a><a href="mailto:a@b.c">m</a>'
             )),
             "/blog/": (200, [("Content-Type", html)],
@@ -275,6 +317,8 @@ class CrawlHandler(BaseHTTPRequestHandler):
             "/landing/": (200, [("Content-Type", html)], '<a href="child">c</a>'),
             "/landing/child": (200, [("Content-Type", html)], "<html></html>"),
             "/xhtml": (200, [("Content-Type", "application/xhtml+xml; charset=utf-8")], '<a href="/from-xhtml">x</a>'),
+            "/xhtmlish": (200, [("Content-Type", "application/vnd.example+html")], '<a href="/from-xhtmlish">x</a>'),
+            "/from-xhtmlish": (200, [("Content-Type", html)], "<html></html>"),
             "/from-xhtml": (200, [("Content-Type", html)], "<html></html>"),
             "/noct": (200, [], '<html><body><a href="/from-noct">n</a></body></html>'),
             "/from-noct": (200, [("Content-Type", html)], "<html></html>"),
@@ -319,6 +363,7 @@ class TestBFSCrawler(unittest.TestCase):
 
     def test_xhtml_and_missing_content_type_are_crawled(self) -> None:
         self.assertTrue(self.visited("/from-xhtml"))
+        self.assertTrue(self.visited("/from-xhtmlish"))
         self.assertTrue(self.visited("/from-noct"))
 
     def test_out_of_scope_redirect_not_followed(self) -> None:
