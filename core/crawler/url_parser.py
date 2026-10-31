@@ -92,8 +92,8 @@ class URLParser:
                 host = f"[{host}]"
             try:
                 port = parsed.port
-            except ValueError:
-                port = None
+            except ValueError as exc:
+                raise ValueError(f"URL có cổng không hợp lệ: {url}") from exc
             if port is not None and port == cls.DEFAULT_PORTS.get(scheme):
                 port = None
             netloc = (f"{userinfo}@" if userinfo else "") + host + (f":{port}" if port is not None else "")
@@ -113,11 +113,12 @@ class URLParser:
             return None
 
         try:
-            base = current_url
-            parsed_cur = urlparse(base)
+            parsed_cur = urlparse(current_url)
+            base_path = parsed_cur.path or "/"
+            base = parsed_cur._replace(path=base_path, query="", fragment="").geturl()
             last_seg = parsed_cur.path.rstrip("/").split("/")[-1] if parsed_cur.path else ""
-            if last_seg and "." not in last_seg and not base.endswith("/"):
-                base = base + "/"
+            if last_seg and "." not in last_seg and not base_path.endswith("/"):
+                base = parsed_cur._replace(path=f"{base_path}/", query="", fragment="").geturl()
             absolute = urljoin(base, link)
             absolute = self.normalize(absolute)
             parsed = urlparse(absolute)

@@ -25,8 +25,6 @@ ProgressCallback = Callable[[int, str], None]
 MAX_REDIRECTS = 5
 # Content-Type chấp nhận là HTML
 HTML_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
-# Content-Type thiếu/chung chung: phải đoán (sniff) nội dung thay vì bỏ qua trang
-AMBIGUOUS_CONTENT_TYPES = frozenset({"", "text/plain", "application/octet-stream", "unknown/unknown"})
 HTML_SNIFF_MARKERS = ("<html", "<!doctype html", "<head", "<body", "<a ", "<form", "<div", "<title")
 
 
@@ -155,7 +153,7 @@ class BFSCrawler:
             if not location:
                 break
             try:
-                target = urljoin(current, location.strip())
+                target = self.url_parser.normalize(urljoin(current, location.strip()))
                 in_scope = self.url_parser.is_in_scope(target)
             except ValueError:
                 return None
@@ -176,10 +174,9 @@ class BFSCrawler:
 
         if media_type in HTML_CONTENT_TYPES:
             return response.text, current
-        if media_type in AMBIGUOUS_CONTENT_TYPES:
-            text = response.text
-            if self._looks_like_html(text):
-                return text, current
+        text = response.text
+        if self._looks_like_html(text):
+            return text, current
         return None
 
     @staticmethod
