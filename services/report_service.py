@@ -54,6 +54,8 @@ def _summary_lines(report: dict[str, Any]) -> list[str]:
     ]
     for module, reason in report.get("skipped_modules", {}).items():
         lines.append(f"Skipped       : {module} ({reason})")
+    if report.get("message"):
+        lines.append(f"Message       : {report['message']}")
     if report.get("error_message"):
         lines.append(f"Error         : {report['error_message']}")
     return lines

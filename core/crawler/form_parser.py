@@ -24,6 +24,7 @@ class EndpointDescriptor:
     - params: Từ điển {tên tham số: giá trị mẫu} - chính là các điểm tiêm payload.
     - source: Nguồn phát hiện ('query' nếu lấy từ URL, 'form' nếu lấy từ thẻ <form>).
     - depth:  Độ sâu của trang nơi tìm thấy endpoint này.
+    - page_url: URL trang HTML chứa form (nếu có), để scanner đối chiếu lại nội dung form.
     """
 
     url: str
@@ -31,6 +32,7 @@ class EndpointDescriptor:
     params: dict[str, str] = field(default_factory=dict)
     source: str = "form"
     depth: int = 0
+    page_url: str | None = None
 
     def __post_init__(self) -> None:
         self.method = (self.method or "GET").upper()
@@ -89,6 +91,7 @@ class FormParser:
                     params=params,
                     source="form",
                     depth=depth,
+                    page_url=page_url,
                 )
             )
         return endpoints

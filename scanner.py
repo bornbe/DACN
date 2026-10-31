@@ -153,6 +153,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n[!] Xuất báo cáo thất bại: {exc}", file=sys.stderr)
             return 1
 
+    if report.status == "NO_MODULES":
+        print(f"[!] {report.message}", file=sys.stderr)
+        print("[!] Hãy chọn module khả dụng (ví dụ: -m headers,csrf).", file=sys.stderr)
+        return 2
     if report.status == "FAILED":
         print(f"[!] Quét thất bại: {report.error_message}", file=sys.stderr)
         return 1

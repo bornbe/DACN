@@ -42,6 +42,7 @@ class ScanReport:
     findings: list[Finding] = field(default_factory=list)
     summary: dict[str, Any] = field(default_factory=dict)
     error_message: str | None = None
+    message: str | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -61,6 +62,7 @@ class ScanReport:
             "duration_seconds": self.duration_seconds,
             "summary": self.summary,
             "error_message": self.error_message,
+            "message": self.message,
             "endpoints": [ep.to_dict() for ep in self.endpoints],
             "findings": [f.to_dict() for f in self.findings],
         }
@@ -103,20 +105,29 @@ class ScanEngine:
             self._validate_target(ctx.target_url)
             self._init_persistence(report)
 
-            # Giai đoạn 1: Crawl
-            self._set_status(report, "CRAWLING")
-            crawl_result = self._crawl()
-            pages_crawled = len(crawl_result.visited_urls)
-            report.endpoints = self._with_root_endpoint(crawl_result.endpoints)
-            if self.db is not None and self._session_id:
-                ResultManager.persist_endpoints(self.db, self._session_id, report.endpoints)
-
-            # Giai đoạn 2: Scan
-            self._set_status(report, "SCANNING")
+            # Khởi tạo scanner trước khi crawl để biết sớm có module khả dụng hay không
             scanners = self._build_scanners(report)
-            self._scan(report.endpoints, scanners)
+            if not scanners:
+                # Không có module hợp lệ: không crawl, không lỗi - trả về kết quả rỗng có cấu trúc
+                skipped = "; ".join(f"{m} ({r})" for m, r in report.skipped_modules.items())
+                report.status = "NO_MODULES"
+                report.message = f"Không có module quét khả dụng nào để thực thi. Đã bỏ qua: {skipped or '-'}"
+                logger.warning(report.message)
+                ctx.emit("warning", message=report.message)
+            else:
+                # Giai đoạn 1: Crawl
+                self._set_status(report, "CRAWLING")
+                crawl_result = self._crawl()
+                pages_crawled = len(crawl_result.visited_urls)
+                report.endpoints = self._with_root_endpoint(crawl_result.endpoints)
+                if self.db is not None and self._session_id:
+                    ResultManager.persist_endpoints(self.db, self._session_id, report.endpoints)
 
-            report.status = "COMPLETED"
+                # Giai đoạn 2: Scan
+                self._set_status(report, "SCANNING")
+                self._scan(report.endpoints, scanners)
+
+                report.status = "COMPLETED"
         except (ScanCancelled, KeyboardInterrupt):
             report.status = "CANCELLED"
             report.error_message = "Phiên quét đã bị hủy."
@@ -187,12 +198,13 @@ class ScanEngine:
                 report.skipped_modules[key] = reason
                 ctx.emit("warning", message=f"Bỏ qua module '{key}': {reason}")
         report.modules = active
-        if not scanners:
-            raise RuntimeError("Không có module quét khả dụng nào để thực thi.")
         return scanners
 
     def _scan(self, endpoints: list[EndpointDescriptor], scanners: list[BaseScanner]) -> None:
         ctx = self.ctx
+        # Mỗi lần quét bắt đầu với trạng thái phiên mới (kể cả khi scanner được tái sử dụng)
+        for scanner in scanners:
+            scanner.reset()
         total_steps = max(len(endpoints) * len(scanners), 1)
         done = 0
         for endpoint in endpoints:
@@ -278,5 +290,5 @@ class ScanEngine:
             progress=100 if report.status == "COMPLETED" else max(self._last_percent, 0),
             end_time=report.end_time,
             summary_stats=report.summary,
-            error_message=report.error_message,
+            error_message=report.error_message or report.message,
         )
