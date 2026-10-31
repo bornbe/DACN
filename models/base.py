@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 from typing import Generator
 
 from sqlalchemy import DateTime, create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from config.config import Config
 
@@ -42,16 +43,29 @@ class TimestampMixin:
 
 
 _engine: Engine | None = None
+_engine_uri: str | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+
+
+def _is_sqlite_memory(uri: str) -> bool:
+    url = make_url(uri)
+    return url.get_backend_name() == "sqlite" and url.database in (None, "", ":memory:")
 
 
 def get_engine(database_uri: str | None = None) -> Engine:
     """Tạo hoặc lấy SQLAlchemy Engine."""
-    global _engine
+    global _engine, _engine_uri
     uri = database_uri or Config.SQLALCHEMY_DATABASE_URI
-    if _engine is None or str(_engine.url) != uri:
-        connect_args = {"check_same_thread": False} if uri.startswith("sqlite") else {}
-        _engine = create_engine(uri, connect_args=connect_args, future=True)
+    # So sánh theo chuỗi URI gốc: str(engine.url) che mật khẩu thành '***' nên luôn khác URI có mật khẩu
+    if _engine is None or _engine_uri != uri:
+        kwargs: dict = {}
+        if uri.startswith("sqlite"):
+            kwargs["connect_args"] = {"check_same_thread": False}
+            if _is_sqlite_memory(uri):
+                # DB in-memory: dùng chung một kết nối cho mọi luồng (Background Worker) để thấy cùng dữ liệu
+                kwargs["poolclass"] = StaticPool
+        _engine = create_engine(uri, future=True, **kwargs)
+        _engine_uri = uri
     return _engine
 
 

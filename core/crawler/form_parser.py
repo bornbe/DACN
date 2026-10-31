@@ -14,6 +14,11 @@ from bs4 import BeautifulSoup
 if TYPE_CHECKING:
     from core.crawler.url_parser import URLParser
 
+# Các method HTTP chấp nhận cho form (method khác không hợp lệ -> trình duyệt xử lý như GET)
+VALID_FORM_METHODS: frozenset[str] = frozenset({"GET", "POST", "PUT", "DELETE", "PATCH"})
+# Giá trị method override (hidden `_method`) làm form POST thực chất thay đổi trạng thái theo method khác
+OVERRIDE_METHODS: frozenset[str] = frozenset({"PUT", "DELETE", "PATCH"})
+
 
 @dataclass
 class EndpointDescriptor:
@@ -25,6 +30,7 @@ class EndpointDescriptor:
     - source: Nguồn phát hiện ('query' nếu lấy từ URL, 'form' nếu lấy từ thẻ <form>).
     - depth:  Độ sâu của trang nơi tìm thấy endpoint này.
     - page_url: URL trang HTML chứa form (nếu có), để scanner đối chiếu lại nội dung form.
+    - method_override: Method thực tế khi form POST có hidden `_method=PUT/DELETE/PATCH` (None nếu không có).
     """
 
     url: str
@@ -33,9 +39,17 @@ class EndpointDescriptor:
     source: str = "form"
     depth: int = 0
     page_url: str | None = None
+    method_override: str | None = None
 
     def __post_init__(self) -> None:
         self.method = (self.method or "GET").upper()
+        if self.method_override:
+            self.method_override = self.method_override.upper()
+
+    @property
+    def effective_method(self) -> str:
+        """Method có hiệu lực ở tầng ứng dụng: method override nếu có, ngược lại là method HTTP."""
+        return self.method_override or self.method
 
     @property
     def params_schema(self) -> dict[str, str]:
@@ -54,6 +68,7 @@ class EndpointDescriptor:
             "params": self.params,
             "source": self.source,
             "depth": self.depth,
+            "method_override": self.method_override,
         }
 
 
@@ -75,14 +90,28 @@ class FormParser:
         endpoints: list[EndpointDescriptor] = []
 
         for form in soup.find_all("form"):
-            action = form.get("action")
-            # Form không có action -> gửi về chính trang hiện tại
-            target_url = self.url_parser.to_absolute(action, page_url) if action else page_url
+            action = (form.get("action") or "").strip()
+            # Form không có action (hoặc action rỗng) -> gửi về chính trang hiện tại
+            try:
+                target_url = (
+                    self.url_parser.to_absolute(action, page_url) if action else self.url_parser.normalize(page_url)
+                )
+            except ValueError:
+                continue
             if not target_url or not self.url_parser.is_in_scope(target_url):
                 continue
 
             method = (form.get("method") or "GET").strip().upper()
-            params = self._extract_input_fields(form)
+            if method not in VALID_FORM_METHODS:
+                method = "GET"
+            params = self._extract_input_fields(form, soup)
+
+            method_override = None
+            if method == "POST":
+                for name, value in params.items():
+                    if name.lower() == "_method" and value.strip().upper() in OVERRIDE_METHODS:
+                        method_override = value.strip().upper()
+                        break
 
             endpoints.append(
                 EndpointDescriptor(
@@ -92,29 +121,47 @@ class FormParser:
                     source="form",
                     depth=depth,
                     page_url=page_url,
+                    method_override=method_override,
                 )
             )
         return endpoints
 
-    def _extract_input_fields(self, form: Any) -> dict[str, str]:
-        """Thu thập các trường <input>, <textarea>, <select> có thuộc tính name trong một form."""
+    def _extract_input_fields(self, form: Any, soup: Any = None) -> dict[str, str]:
+        """
+        Thu thập các trường <input>, <textarea>, <select> có thuộc tính name trong một form,
+        gồm cả trường hidden và các trường nằm ngoài thẻ <form> nhưng gắn qua thuộc tính form="id".
+        """
         params: dict[str, str] = {}
 
-        for tag in form.find_all(["input", "textarea", "select"]):
+        tags = list(form.find_all(["input", "textarea", "select"]))
+        form_id = form.get("id")
+        if soup is not None and form_id:
+            tags += soup.find_all(["input", "textarea", "select"], attrs={"form": form_id})
+
+        for tag in tags:
             name = tag.get("name")
             if not name:
                 continue
 
             tag_name = tag.name.lower()
             if tag_name == "input":
-                input_type = (tag.get("type") or "text").lower()
+                input_type = (tag.get("type") or "text").strip().lower()
                 if input_type in self.IGNORED_INPUT_TYPES:
+                    continue
+                if input_type in ("checkbox", "radio"):
+                    # Không có thuộc tính value thì trình duyệt gửi "on"; radio ưu tiên phần tử được chọn
+                    if input_type == "radio" and name in params and not tag.has_attr("checked"):
+                        continue
+                    params[name] = tag.get("value", "on")
                     continue
                 params[name] = tag.get("value", "")
             elif tag_name == "textarea":
                 params[name] = tag.get_text(strip=True)
             elif tag_name == "select":
                 option = tag.find("option", selected=True) or tag.find("option")
-                params[name] = option.get("value", "") if option else ""
+                if option is None:
+                    params[name] = ""
+                else:
+                    params[name] = option.get("value", option.get_text(strip=True))
 
         return params

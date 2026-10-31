@@ -7,6 +7,7 @@ tham số truy vấn (query parameters) từ URL.
 
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import parse_qsl, urldefrag, urljoin, urlparse
 
 
@@ -21,15 +22,18 @@ class URLParser:
     SKIP_EXTENSIONS: frozenset[str] = frozenset(
         {
             ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico", ".webp", ".bmp",
-            ".css", ".js", ".woff", ".woff2", ".ttf", ".eot",
+            ".css", ".js", ".map", ".woff", ".woff2", ".ttf", ".eot",
             ".pdf", ".zip", ".rar", ".gz", ".tar", ".7z",
             ".mp3", ".mp4", ".avi", ".mov", ".webm", ".wav",
-            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv",
+            ".exe", ".msi", ".iso", ".apk", ".dmg",
         }
     )
 
     # Chỉ chấp nhận hai giao thức HTTP/HTTPS
     ALLOWED_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+
+    DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
 
     def __init__(self, base_url: str) -> None:
         normalized = self.normalize(base_url)
@@ -37,12 +41,37 @@ class URLParser:
         self.base_url: str = normalized
         self.base_scheme: str = parsed.scheme or "http"
         self.base_host: str = parsed.netloc.lower()
+        self.base_hostname: str = (parsed.hostname or "").lower().rstrip(".")
+        self.base_port: int | None = self._effective_port(parsed)
+        # Miền gốc để so khớp subdomain: bỏ tiền tố 'www.'; IP/localhost chỉ khớp chính xác
+        self.base_domain: str = self.base_hostname
+        if self.base_domain.startswith("www."):
+            self.base_domain = self.base_domain[4:]
+        self._allow_subdomains: bool = "." in self.base_domain and not self._is_ip(self.base_domain)
 
     @staticmethod
-    def normalize(url: str) -> str:
+    def _is_ip(host: str) -> bool:
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
+    def _effective_port(cls, parsed) -> int | None:
+        """Cổng thực tế của URL (cổng mặc định theo scheme nếu không ghi rõ)."""
+        try:
+            port = parsed.port
+        except ValueError:
+            return None
+        return port if port is not None else cls.DEFAULT_PORTS.get(parsed.scheme)
+
+    @classmethod
+    def normalize(cls, url: str) -> str:
         """
         Chuẩn hóa URL để chống trùng lặp:
         - Loại bỏ phần fragment (#section).
+        - Scheme và hostname về chữ thường; bỏ cổng mặc định (:80 cho http, :443 cho https).
         - Bỏ dấu '/' thừa ở cuối đường dẫn (trừ đường dẫn gốc).
         """
         url, _fragment = urldefrag(url.strip())
@@ -53,34 +82,75 @@ class URLParser:
             path = "/"
         elif len(path) > 1 and path.endswith("/"):
             path = path.rstrip("/")
-        parsed = parsed._replace(path=path)
+
+        scheme = parsed.scheme.lower()
+        netloc = parsed.netloc
+        if parsed.hostname:
+            userinfo = netloc.rpartition("@")[0]
+            host = parsed.hostname.lower()
+            if ":" in host:  # IPv6 literal
+                host = f"[{host}]"
+            try:
+                port = parsed.port
+            except ValueError:
+                port = None
+            if port is not None and port == cls.DEFAULT_PORTS.get(scheme):
+                port = None
+            netloc = (f"{userinfo}@" if userinfo else "") + host + (f":{port}" if port is not None else "")
+        parsed = parsed._replace(scheme=scheme, netloc=netloc, path=path)
         return parsed.geturl()
 
     def to_absolute(self, link: str, current_url: str) -> str | None:
         """
         Chuyển một liên kết (có thể tương đối) thành URL tuyệt đối dựa trên trang hiện tại.
-        Trả về None nếu liên kết không hợp lệ (javascript:, mailto:, tel:, rỗng...).
+        Trả về None nếu liên kết không hợp lệ (javascript:, mailto:, tel:, rỗng, URL dị dạng...).
         """
-        link = link.strip()
+        link = (link or "").strip()
         if not link:
             return None
         lowered = link.lower()
         if lowered.startswith(("javascript:", "mailto:", "tel:", "data:", "#")):
             return None
 
-        absolute = urljoin(current_url, link)
-        absolute = self.normalize(absolute)
-        parsed = urlparse(absolute)
+        try:
+            base = current_url
+            parsed_cur = urlparse(base)
+            last_seg = parsed_cur.path.rstrip("/").split("/")[-1] if parsed_cur.path else ""
+            if last_seg and "." not in last_seg and not base.endswith("/"):
+                base = base + "/"
+            absolute = urljoin(base, link)
+            absolute = self.normalize(absolute)
+            parsed = urlparse(absolute)
+        except ValueError:
+            # Ví dụ href="http://[invalid" làm urlparse ném ValueError: bỏ qua liên kết thay vì sập crawler
+            return None
         if parsed.scheme not in self.ALLOWED_SCHEMES:
             return None
         return absolute
 
     def is_in_scope(self, url: str) -> bool:
-        """Kiểm tra URL có nằm trong phạm vi (cùng Hostname với mục tiêu) hay không."""
-        parsed = urlparse(url)
-        if parsed.scheme not in self.ALLOWED_SCHEMES:
+        """
+        Kiểm tra URL có nằm trong phạm vi hay không: cùng Hostname (hoặc subdomain của miền mục tiêu)
+        và cùng cổng (http/https cổng mặc định được coi là tương đương để theo kịp chuyển hướng HTTP->HTTPS).
+        """
+        try:
+            parsed = urlparse(url)
+            hostname = (parsed.hostname or "").lower().rstrip(".")
+            port = self._effective_port(parsed)
+        except ValueError:
             return False
-        return parsed.netloc.lower() == self.base_host
+        if parsed.scheme not in self.ALLOWED_SCHEMES or not hostname:
+            return False
+
+        host_ok = hostname == self.base_hostname or (
+            self._allow_subdomains
+            and (hostname == self.base_domain or hostname.endswith("." + self.base_domain))
+        )
+        if not host_ok:
+            return False
+
+        default_ports = set(self.DEFAULT_PORTS.values())
+        return port == self.base_port or (port in default_ports and self.base_port in default_ports)
 
     def is_crawlable(self, url: str) -> bool:
         """Loại bỏ các liên kết trỏ tới tài nguyên tĩnh (ảnh, css, js, tài liệu...)."""

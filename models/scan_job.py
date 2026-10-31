@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from config.crypto_utils import EncryptedText
+from config.crypto_utils import EncryptedJSON, EncryptedText
 from models.base import Base, TimestampMixin, utc_now
 
 if TYPE_CHECKING:
@@ -39,7 +39,8 @@ class ScanTarget(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
-    url: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    # URL mục tiêu được mã hóa At-Rest (tất định để vẫn truy vấn so khớp bằng được)
+    url: Mapped[str] = mapped_column(EncryptedText(deterministic=True), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     sessions: Mapped[list["ScanSession"]] = relationship(
@@ -112,7 +113,8 @@ class ScanSession(Base, TimestampMixin):
         },
         nullable=False,
     )
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Thông báo lỗi có thể chứa URL nội bộ nên được mã hóa At-Rest
+    error_message: Mapped[str | None] = mapped_column(EncryptedText(), nullable=True)
 
     # Quan hệ 1-N với ScanTarget, CrawledEndpoint và VulnerabilityFinding
     target: Mapped["ScanTarget"] = relationship("ScanTarget", back_populates="sessions")
@@ -163,7 +165,8 @@ class CrawledEndpoint(Base, TimestampMixin):
     url: Mapped[str] = mapped_column(EncryptedText(), nullable=False)
     method: Mapped[str] = mapped_column(String(16), default="GET", nullable=False)
     depth: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    params_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    # Giá trị mặc định của form có thể chứa token/mật khẩu nên cũng được mã hóa At-Rest
+    params_schema: Mapped[dict[str, Any]] = mapped_column(EncryptedJSON(), default=dict, nullable=False)
 
     session: Mapped["ScanSession"] = relationship("ScanSession", back_populates="endpoints")
 
