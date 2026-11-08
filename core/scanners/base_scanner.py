@@ -140,13 +140,19 @@ class BaseScanner(ABC):
         """
         Gửi HTTP request an toàn. Redirect 3xx được theo thủ công (tối đa MAX_REDIRECTS) và
         chỉ khi URL đích nằm trong scope của `url` gốc; nếu ra ngoài scope, trả None và
-        không gửi request tới đích đó. Trả None nếu bị hủy hoặc gặp lỗi mạng/timeout.
+        không gửi request tới đích đó. Trả None nếu bị hủy, URL sai định dạng hoặc lỗi mạng/timeout.
         """
+        if self.stop_event is not None and self.stop_event.is_set():
+            return None
+        try:
+            scope = URLParser(url)
+        except ValueError as exc:
+            logger.warning("URL không hợp lệ %s: %s", url, exc)
+            return None
         kwargs.setdefault("timeout", self.timeout)
         follow = kwargs.pop("allow_redirects", True)
         kwargs["allow_redirects"] = False
         sess = session or self.session
-        scope = URLParser(url)
         current_method = method.upper()
         current_url = url
         for hop in range(MAX_REDIRECTS + 1):
@@ -155,8 +161,8 @@ class BaseScanner(ABC):
             self._throttle()
             try:
                 response = sess.request(current_method, current_url, **kwargs)
-            except requests.RequestException as exc:
-                logger.warning("Lỗi mạng khi %s %s: %s", current_method, current_url, exc)
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning("Lỗi mạng/URL khi %s %s: %s", current_method, current_url, exc)
                 return None
             location = response.headers.get("Location")
             if not follow or not (300 <= response.status_code < 400) or not location:
@@ -164,8 +170,14 @@ class BaseScanner(ABC):
             if hop >= MAX_REDIRECTS:
                 logger.warning("Vượt quá %d lần redirect tại %s", MAX_REDIRECTS, url)
                 return None
-            target = urljoin(current_url, location)
-            if not scope.is_in_scope(target):
+            try:
+                target = urljoin(current_url, location.strip())
+                URLParser.normalize(target)
+                in_scope = scope.is_in_scope(target)
+            except ValueError as exc:
+                logger.warning("URL redirect không hợp lệ từ %s -> %s: %s", current_url, location, exc)
+                return None
+            if not in_scope:
                 logger.warning("Chặn redirect ra ngoài scope: %s -> %s", current_url, target)
                 return None
             if response.status_code == 303 or (
