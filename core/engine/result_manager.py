@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from core.crawler.form_parser import EndpointDescriptor
 from core.scanners.base_scanner import SEVERITY_ORDER, Finding
+from core.security.data_sanitizer import mask_sensitive_data
 from models.scan_job import CrawledEndpoint
 from models.vulnerability import VulnerabilityFinding
 
@@ -25,6 +26,8 @@ class ResultManager:
 
     def add(self, finding: Finding) -> bool:
         """Thêm Finding; trả về False nếu là bản trùng lặp và bị bỏ qua."""
+        finding.evidence = mask_sensitive_data(finding.evidence)
+        finding.payload = mask_sensitive_data(finding.payload)
         key = finding.dedup_key()
         if key in self._keys:
             return False
@@ -63,8 +66,8 @@ class ResultManager:
                     severity=f.severity,
                     target_url=f.target_url,
                     param=f.parameter,
-                    payload=f.payload,
-                    evidence=f.evidence,
+                    payload=mask_sensitive_data(f.payload),
+                    evidence=mask_sensitive_data(f.evidence),
                     cwe_id=f.cwe_id,
                     owasp_category=f.owasp_category,
                     remediation=f.remediation,

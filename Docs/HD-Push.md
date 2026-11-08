@@ -28,7 +28,7 @@ git checkout main #về nhánh main pull tránh conflic code
 
 git pull origin main #pull
 -----xử lý code mới------
-git checkout feature/mssv-mudule-<Số mudule đang làm>
+git checkout -b feature/mssv-mudule-<Số mudule đang làm>
 
 
 
