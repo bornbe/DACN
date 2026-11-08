@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template
 from flask.typing import ResponseReturnValue
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -45,6 +45,15 @@ def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
     @app.get("/api/health")
     def health() -> ResponseReturnValue:
         return jsonify(status="ok"), 200
+
+    # Issue #6.1: serve the dashboard and scan detail pages.
+    @app.get("/")
+    def dashboard() -> str:
+        return render_template("dashboard.html")
+
+    @app.get("/scans/<int:session_id>")
+    def scan_detail(session_id: int) -> str:
+        return render_template("scan_detail.html", session_id=session_id)
 
     return app
 

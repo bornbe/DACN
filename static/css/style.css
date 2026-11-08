@@ -1,0 +1,168 @@
+/* Issue #6.1: responsive dashboard styles. */
+:root {
+  --page-bg: #f4f6fa;
+  --ink: #172033;
+  --muted: #687386;
+  --line: #e7eaf0;
+  --brand: #3156a6;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--page-bg);
+  color: var(--ink);
+}
+
+.navbar-brand { letter-spacing: -.02em; }
+.navbar-brand span { font-size: .82em; }
+main.container { min-height: calc(100vh - 130px); }
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.eyebrow {
+  color: var(--brand);
+  font-size: .69rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.panel-card {
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  box-shadow: 0 .45rem 1.5rem rgba(23, 32, 51, .045);
+}
+
+.panel-card .card-body { min-width: 0; }
+.form-control, .form-select { min-height: 2.8rem; }
+.form-control:focus, .form-select:focus {
+  border-color: #9ab2ee;
+  box-shadow: 0 0 0 .2rem rgba(49, 86, 166, .13);
+}
+.btn-primary { background: var(--brand); border-color: var(--brand); }
+.btn-primary:hover { background: #254585; border-color: #254585; }
+.module-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+}
+.module-options .form-check {
+  margin: 0;
+  padding: .65rem .7rem .65rem 2rem;
+  border: 1px solid var(--line);
+  border-radius: .65rem;
+}
+.module-options .form-check-input { margin-left: -1.3rem; }
+
+.health-pill, .count-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .45rem .7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  font-size: .78rem;
+  white-space: nowrap;
+}
+.health-online { color: #157347; }
+.health-dot {
+  width: .48rem;
+  height: .48rem;
+  border-radius: 50%;
+  background: #f0ad4e;
+}
+.health-dot-online { background: #198754; }
+.count-badge { color: var(--brand); font-weight: 700; }
+
+.chart-wrap { position: relative; width: 100%; }
+.chart-wrap-overview { height: 260px; }
+.chart-wrap-detail { height: 270px; }
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: .9rem;
+  pointer-events: none;
+}
+
+.scan-table, .findings-table { font-size: .88rem; }
+.scan-table thead th, .findings-table thead th {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.scan-table tbody tr:last-child td, .findings-table tbody tr:last-child td { border-bottom: 0; }
+.scan-table td, .findings-table td { max-width: 17rem; }
+.target-cell, .url-cell, .evidence-cell {
+  max-width: 20rem !important;
+  overflow-wrap: anywhere;
+}
+.evidence-cell { min-width: 11rem; white-space: pre-wrap; }
+.progress-column { min-width: 7.5rem; }
+.mini-progress {
+  height: .38rem;
+  overflow: hidden;
+  border-radius: 1rem;
+  background: #e9edf4;
+}
+.mini-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #3156a6;
+  transition: width .25s ease;
+}
+.mini-progress-label { display: block; margin-top: .2rem; color: var(--muted); font-size: .72rem; }
+
+.status-badge, .severity-badge {
+  display: inline-block;
+  padding: .35rem .58rem;
+  border-radius: 999px;
+  background: #eef0f4;
+  color: #525c6b;
+  font-size: .72rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.status-pending, .status-cancelled { background: #edf0f5; color: #5c6678; }
+.status-running, .status-crawling, .status-scanning { background: #e7efff; color: #2453a6; }
+.status-completed { background: #e1f4e9; color: #167445; }
+.status-failed { background: #fde8e8; color: #b4232e; }
+.status-no_modules { background: #fff3cd; color: #856404; }
+.severity-critical { background: #7d1736; color: #fff; }
+.severity-high { background: #f8d7da; color: #a31422; }
+.severity-medium { background: #ffedd5; color: #a64b00; }
+.severity-low { background: #fff3cd; color: #795b00; }
+.severity-info { background: #e9ecef; color: #495057; }
+
+.progress-tall { height: .8rem; background: #e9edf4; }
+.progress-tall .progress-bar { background-color: var(--brand); }
+.detail-meta { display: flex; flex-wrap: wrap; gap: .5rem 1.4rem; color: var(--muted); font-size: .82rem; }
+.empty-state {
+  padding: 1.75rem 1rem;
+  border: 1px dashed #d8deea;
+  border-radius: .75rem;
+  color: var(--muted);
+  text-align: center;
+}
+.back-link { color: var(--brand); font-size: .9rem; text-decoration: none; }
+.back-link:hover { text-decoration: underline; }
+
+@media (max-width: 575.98px) {
+  .page-heading { align-items: flex-start; flex-direction: column; }
+  .module-options { grid-template-columns: 1fr; }
+  .chart-wrap-overview { height: 230px; }
+  .chart-wrap-detail { height: 240px; }
+  .scan-table, .findings-table { font-size: .8rem; }
+}

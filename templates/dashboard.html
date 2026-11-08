@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Tổng quan | DACN Lab Scanner{% endblock %}
+{% block content %}
+<!-- Issue #6.1: dashboard for local authorized lab scans. -->
+<section class="page-heading mb-4">
+  <div>
+    <p class="eyebrow mb-2">BẢNG ĐIỀU KHIỂN</p>
+    <h1 class="h2 mb-1">Tổng quan phiên quét</h1>
+    <p class="text-secondary mb-0">Quản lý các tác vụ quét trong môi trường lab cục bộ.</p>
+  </div>
+  <span id="api-health" class="health-pill"><span class="health-dot"></span> Đang kiểm tra API</span>
+</section>
+
+<section id="auth-panel" class="row justify-content-center">
+  <div class="col-lg-7 col-xl-6">
+    <div class="card panel-card">
+      <div class="card-body p-4 p-md-5">
+        <ul class="nav nav-pills nav-fill mb-4" id="auth-tabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="login-tab" data-bs-toggle="pill" data-bs-target="#login-pane"
+                    type="button" role="tab" aria-controls="login-pane" aria-selected="true">Đăng nhập</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="register-tab" data-bs-toggle="pill" data-bs-target="#register-pane"
+                    type="button" role="tab" aria-controls="register-pane" aria-selected="false">Tạo tài khoản</button>
+          </li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="login-pane" role="tabpanel" aria-labelledby="login-tab">
+            <h2 class="h4 mb-1">Chào mừng trở lại</h2>
+            <p class="text-secondary mb-4">Đăng nhập để quản lý các phiên quét của bạn.</p>
+            <form id="login-form">
+              <div class="mb-3">
+                <label for="login-username" class="form-label">Tên đăng nhập</label>
+                <input id="login-username" class="form-control" name="username" autocomplete="username" required>
+              </div>
+              <div class="mb-4">
+                <label for="login-password" class="form-label">Mật khẩu</label>
+                <input id="login-password" class="form-control" name="password" type="password"
+                       autocomplete="current-password" required>
+              </div>
+              <button class="btn btn-primary w-100" type="submit">Đăng nhập</button>
+            </form>
+          </div>
+          <div class="tab-pane fade" id="register-pane" role="tabpanel" aria-labelledby="register-tab">
+            <h2 class="h4 mb-1">Tạo tài khoản lab</h2>
+            <p class="text-secondary mb-4">Đăng ký để lưu và theo dõi các phiên quét.</p>
+            <form id="register-form">
+              <div class="mb-3">
+                <label for="register-username" class="form-label">Tên đăng nhập</label>
+                <input id="register-username" class="form-control" name="username" minlength="3" maxlength="80"
+                       autocomplete="username" required>
+              </div>
+              <div class="mb-3">
+                <label for="register-email" class="form-label">Email</label>
+                <input id="register-email" class="form-control" name="email" type="email" maxlength="120"
+                       autocomplete="email" required>
+              </div>
+              <div class="mb-4">
+                <label for="register-password" class="form-label">Mật khẩu</label>
+                <input id="register-password" class="form-control" name="password" type="password" minlength="8"
+                       autocomplete="new-password" required>
+                <div class="form-text">Tối thiểu 8 ký tự.</div>
+              </div>
+              <button class="btn btn-primary w-100" type="submit">Tạo tài khoản</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="text-center text-secondary small mt-3">Chỉ quét localhost hoặc địa chỉ loopback trong lab.</p>
+  </div>
+</section>
+
+<div id="dashboard-content" class="d-none">
+  <section class="row g-4 mb-4">
+    <div class="col-12 col-xl-5">
+      <div class="card panel-card h-100">
+        <div class="card-body p-4">
+          <div class="mb-4">
+            <p class="eyebrow mb-2">TẠO TÁC VỤ</p>
+            <h2 class="h4 mb-1">Quét mục tiêu lab</h2>
+            <p class="text-secondary small mb-0">Yêu cầu chỉ được gửi tới localhost/loopback.</p>
+          </div>
+          <form id="scan-form">
+            <div class="mb-3">
+              <label for="scan-url" class="form-label">URL mục tiêu</label>
+              <input id="scan-url" class="form-control" name="url" type="url" placeholder="http://127.0.0.1:8000"
+                     pattern="https?://.+" required>
+              <div class="form-text">Ví dụ: http://localhost:8000 hoặc http://127.0.0.1:8000</div>
+            </div>
+            <div class="mb-3">
+              <label for="max-depth" class="form-label">Độ sâu crawl</label>
+              <select id="max-depth" class="form-select" name="max_depth">
+                <option value="0">0 — Chỉ trang gốc</option>
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <fieldset class="mb-4">
+              <legend class="form-label fs-6 mb-2">Module kiểm tra</legend>
+              <div class="module-options">
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" name="modules" value="sqli" checked>
+                  <span class="form-check-label">SQL Injection</span>
+                </label>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" name="modules" value="xss" checked>
+                  <span class="form-check-label">XSS</span>
+                </label>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" name="modules" value="csrf" checked>
+                  <span class="form-check-label">CSRF</span>
+                </label>
+                <label class="form-check">
+                  <input class="form-check-input" type="checkbox" name="modules" value="headers" checked>
+                  <span class="form-check-label">Security Headers</span>
+                </label>
+              </div>
+            </fieldset>
+            <button id="start-scan-button" class="btn btn-primary w-100" type="submit">
+              <span class="button-label">Bắt đầu quét nền</span>
+              <span class="spinner-border spinner-border-sm ms-2 d-none" aria-hidden="true"></span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-7">
+      <div class="card panel-card h-100">
+        <div class="card-body p-4">
+          <div class="d-flex align-items-start justify-content-between gap-3 mb-3">
+            <div>
+              <p class="eyebrow mb-2">THỐNG KÊ</p>
+              <h2 class="h4 mb-1">Tình trạng tác vụ</h2>
+              <p class="text-secondary small mb-0">Tổng quan các phiên quét gần đây.</p>
+            </div>
+            <span id="scan-count" class="count-badge">0 phiên</span>
+          </div>
+          <div class="chart-wrap chart-wrap-overview">
+            <canvas id="overview-chart" aria-label="Biểu đồ trạng thái các phiên quét"></canvas>
+            <p id="overview-empty" class="chart-empty">Chưa có dữ liệu phiên quét.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card panel-card">
+    <div class="card-body p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+        <div>
+          <p class="eyebrow mb-2">LỊCH SỬ</p>
+          <h2 class="h4 mb-0">Phiên quét của bạn</h2>
+        </div>
+        <button id="refresh-scans" class="btn btn-outline-secondary btn-sm" type="button">Làm mới</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table align-middle scan-table mb-0">
+          <thead>
+            <tr>
+              <th scope="col">Phiên</th>
+              <th scope="col">Mục tiêu</th>
+              <th scope="col">Trạng thái</th>
+              <th scope="col" class="progress-column">Tiến độ</th>
+              <th scope="col">Ngày tạo</th>
+              <th scope="col"><span class="visually-hidden">Chi tiết</span></th>
+            </tr>
+          </thead>
+          <tbody id="scan-list">
+            <tr><td colspan="6" class="text-center text-secondary py-4">Đang tải phiên quét…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

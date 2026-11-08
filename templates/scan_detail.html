@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Chi tiết phiên quét | DACN Lab Scanner{% endblock %}
+{% block content %}
+<!-- Issue #6.1: scan progress and findings dashboard. -->
+<section id="scan-detail-page" data-session-id="{{ session_id }}">
+  <div class="page-heading mb-4">
+    <div>
+      <a class="back-link" href="/">&larr; Về tổng quan</a>
+      <p class="eyebrow mt-3 mb-2">CHI TIẾT PHIÊN QUÉT</p>
+      <h1 class="h2 mb-1">Phiên <span id="detail-session-id">#{{ session_id }}</span></h1>
+      <p id="detail-target" class="text-secondary mb-0">Đang tải thông tin mục tiêu…</p>
+    </div>
+    <span id="detail-status" class="status-badge status-pending">Đang tải</span>
+  </div>
+
+  <div class="card panel-card mb-4">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-center gap-3 mb-2">
+        <h2 class="h5 mb-0">Tiến độ</h2>
+        <span id="detail-progress-label" class="fw-semibold">0%</span>
+      </div>
+      <div class="progress progress-tall" role="progressbar" aria-label="Tiến độ phiên quét"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="detail-progress" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
+      </div>
+      <div class="detail-meta mt-3">
+        <span id="detail-depth"></span>
+        <span id="detail-modules"></span>
+        <span id="detail-findings-count"></span>
+      </div>
+      <p id="detail-error" class="text-danger small mt-3 mb-0 d-none"></p>
+    </div>
+  </div>
+
+  <div class="row g-4 mb-4">
+    <div class="col-12 col-lg-6">
+      <div class="card panel-card h-100">
+        <div class="card-body p-4">
+          <p class="eyebrow mb-2">MỨC ĐỘ</p>
+          <h2 class="h5 mb-3">Phân bố severity</h2>
+          <div class="chart-wrap chart-wrap-detail">
+            <canvas id="severity-chart" aria-label="Biểu đồ phân bố severity"></canvas>
+            <p id="severity-empty" class="chart-empty">Chưa có findings.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="card panel-card h-100">
+        <div class="card-body p-4">
+          <p class="eyebrow mb-2">NHÓM LỖ HỔNG</p>
+          <h2 class="h5 mb-3">Phân bố theo loại</h2>
+          <div class="chart-wrap chart-wrap-detail">
+            <canvas id="type-chart" aria-label="Biểu đồ phân bố theo loại lỗ hổng"></canvas>
+            <p id="type-empty" class="chart-empty">Chưa có findings.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section class="card panel-card">
+    <div class="card-body p-4">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+        <div>
+          <p class="eyebrow mb-2">KẾT QUẢ</p>
+          <h2 class="h4 mb-0">Findings</h2>
+        </div>
+        <span id="findings-count-badge" class="count-badge">0 phát hiện</span>
+      </div>
+      <div id="findings-empty" class="empty-state">Đang chờ kết quả từ tác vụ quét…</div>
+      <div class="table-responsive">
+        <table class="table align-middle findings-table mb-0 d-none" id="findings-table">
+          <thead>
+            <tr>
+              <th scope="col">Mức độ</th>
+              <th scope="col">Loại lỗ hổng</th>
+              <th scope="col">URL</th>
+              <th scope="col">Tham số</th>
+              <th scope="col">Bằng chứng</th>
+              <th scope="col">Khắc phục</th>
+            </tr>
+          </thead>
+          <tbody id="findings-list"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</section>
+{% endblock %}
