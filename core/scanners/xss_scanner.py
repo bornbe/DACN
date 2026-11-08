@@ -15,6 +15,21 @@ from core.scanners.base_scanner import BaseScanner, Finding
 if TYPE_CHECKING:
     from core.crawler.form_parser import EndpointDescriptor
 
+HTML_SNIFF_MARKERS: tuple[str, ...] = (
+    "<html",
+    "<!doctype html",
+    "<head",
+    "<body",
+    "<a ",
+    "<form",
+    "<div",
+    "<title",
+    "<p",
+    "<span",
+    "<input",
+    "<script",
+)
+
 
 class XSSScanner(BaseScanner):
     """Phân loại phản chiếu: bỏ qua non-HTML/đã escape; gắn nhãn 'cần đánh giá' cho phản chiếu rủi ro."""
@@ -51,12 +66,25 @@ class XSSScanner(BaseScanner):
                 findings.append(finding)
         return findings
 
+    @classmethod
+    def _is_html_response(cls, response: Any, token: str) -> bool:
+        """
+        Kiểm tra phản hồi có phải HTML/XHTML hay không.
+        Nếu thiếu Content-Type, đoán HTML dựa trên cấu trúc thẻ ở phần đầu tài liệu
+        (đã loại bỏ chuỗi token/probe để tránh chính payload giả làm thẻ HTML).
+        """
+        content_type = (response.headers.get("Content-Type") or "").strip().lower()
+        media_type = content_type.split(";", 1)[0].strip()
+        if media_type:
+            return "html" in media_type
+        sanitized_head = response.text[:2048].replace(token + cls.PROBE, "").replace(token, "").lower()
+        return any(marker in sanitized_head for marker in HTML_SNIFF_MARKERS)
+
     def analyze_response(
         self, response: Any, url: str, parameter: str, token: str, canary: str
     ) -> Finding | None:
         """Trả Finding nếu token phản chiếu kèm ký tự nguy hiểm chưa mã hóa trong HTML."""
-        content_type = (response.headers.get("Content-Type") or "").lower()
-        if "html" not in content_type:
+        if not self._is_html_response(response, token):
             return None
 
         body = response.text
