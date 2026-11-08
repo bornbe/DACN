@@ -1,0 +1,123 @@
+scannerweb/
+│
+├── app.py                         # Yêu cầu: Khởi tạo ứng dụng Flask, load cấu hình, đăng ký Blueprints và kết nối SQLAlchemy DB.
+├── scanner.py                     # Yêu cầu: Khởi tạo giao diện dòng lệnh (CLI) bằng argparse, gọi trực tiếp Core Engine không qua Web.
+├── requirements.txt               # [BẢO MẬT] Yêu cầu: Liệt kê các thư viện Python (Flask, Celery, requests...) với phiên bản cố định (pinned version) để tránh lỗi tương thích.
+├── .env                           # Yêu cầu: Lưu trữ các biến môi trường nhạy cảm (SECRET_KEY, DATABASE_URI, REDIS_URL). Không commit file này.
+├── .env.example                   # Yêu cầu: Cung cấp template mẫu của file .env với các giá trị giả để Dev mới biết cách cấu hình.
+├── .gitignore                     # Yêu cầu: Khai báo bỏ qua thư mục __pycache__, .env, thư mục reports, và file DB SQLite cục bộ.
+│
+├── config/
+│   ├── __init__.py                # Yêu cầu: Khởi tạo package config.
+│   ├── celery_config.py           # [YÊU CẦU 3] Yêu cầu: Cấu hình Celery (broker, backend, task_acks_late=True, worker_prefetch_multiplier=1) để hỗ trợ phục hồi task.
+│   ├── config.py                  # Yêu cầu: Định nghĩa các class Config (Dev, Prod, Test) load biến từ .env, thiết lập giới hạn worker và timeout.
+│   └── crypto_utils.py            # Yêu cầu: Viết các hàm mã hóa/giải mã sử dụng AES-256-GCM và HMAC để bảo vệ dữ liệu At-Rest.
+│
+├── migrations/                    # Thư mục Flask-Migrate (Alembic)
+│   ├── env.py                     # Yêu cầu: Cấu hình môi trường cho Alembic để kết nối DB và áp dụng metadata từ models.
+│   └── versions/                  # Yêu cầu: Nơi lưu các file script Python chứa lệnh upgrade/downgrade schema DB (tạo tự động).
+│
+├── models/
+│   ├── __init__.py                # Yêu cầu: Import tất cả các model để Flask-Migrate có thể nhận diện.
+│   ├── base.py                    # Yêu cầu: Khởi tạo instance `db = SQLAlchemy()` để sử dụng chung cho toàn dự án.
+│   ├── user.py                    # Yêu cầu: Khai báo class User (id, email, password_hash, role) kế thừa db.Model.
+│   ├── scan_job.py                # [YÊU CẦU 1 & 3] Yêu cầu: Khai báo class ScanJob. Chứa các cột lifecycle (created_at, status...), authorized_scope (JSON), và task_lock_id.
+│   └── vulnerability.py           # Yêu cầu: Khai báo class Vulnerability liên kết Khóa ngoại (Foreign Key) với ScanJob, chứa thông tin lỗ hổng (evidence, cwe_id).
+│
+├── schemas/
+│   ├── __init__.py                # Yêu cầu: Khởi tạo package schemas.
+│   ├── auth_schema.py             # Yêu cầu: Sử dụng Marshmallow để validate input (định dạng email, độ dài mật khẩu) khi user Đăng ký/Đăng nhập.
+│   ├── requested_scope_schema.py  # [YÊU CẦU 1] Yêu cầu: Validate định dạng JSON đầu vào từ client (URL hợp lệ, max_depth dạng số, v.v.), không chứa logic nghiệp vụ.
+│   └── vulnerability_schema.py    # Yêu cầu: Định nghĩa cách thức biến đổi object Vulnerability từ DB thành định dạng JSON để trả về cho API.
+│
+├── controllers/
+│   ├── __init__.py                # Yêu cầu: Khởi tạo package controllers.
+│   ├── auth_controller.py         # Yêu cầu: Định nghĩa các route (Blueprint) `/api/auth/login`, `/api/auth/register`, nhận request và trả về JSON.
+│   ├── scan_controller.py         # Yêu cầu: Định nghĩa các route CRUD cho tiến trình quét `/api/scans`, parse request gửi xuống Service và trả kết quả.
+│   └── report_controller.py       # Yêu cầu: Định nghĩa route `/api/reports/<job_id>` để tải báo cáo, xử lý quyền truy cập.
+│
+├── services/                      
+│   ├── __init__.py                # Yêu cầu: Khởi tạo package services.
+│   ├── auth_service.py            # Yêu cầu: Chứa logic băm mật khẩu (Bcrypt), kiểm tra thông tin user với DB, và cấp phát JWT token.
+│   ├── scan_service.py            # [YÊU CẦU 1] Yêu cầu: Nhận requested_scope, gọi `scope_policy.py` tạo authorized_scope, lưu DB (nhớ filter theo current_user.id) và push task vào Celery.
+│   ├── report_service.py          # Yêu cầu: Truy xuất dữ liệu ScanJob từ DB, render ra file PDF/TXT bằng UUID để tránh Path Traversal.
+│   └── user_service.py            # Yêu cầu: Xử lý logic cập nhật profile, kiểm tra Role của user.
+│
+├── tasks/
+│   ├── __init__.py                # Yêu cầu: Khởi tạo package tasks.
+│   ├── celery_app.py              # Yêu cầu: Khởi tạo đối tượng Celery app, nạp cấu hình từ `celery_config.py`.
+│   ├── scan_tasks.py              # [YÊU CẦU 3] Yêu cầu: Định nghĩa `@celery.task`. Set Redis Lock, gọi ScanEngine, cập nhật progress vào DB, bắt lỗi ghi trạng thái FAILED.
+│   └── recovery_tasks.py          # [YÊU CẦU 3] Yêu cầu: Định nghĩa Cronjob (Celery Beat) chạy định kỳ check các job bị treo (heartbeat timeout) để Retry hoặc Fail.
+│
+├── core/
+│   │
+│   ├── security/                  # Tầng bảo vệ an toàn cho chính Scanner
+│   │   ├── __init__.py            # Yêu cầu: Khởi tạo package security.
+│   │   ├── target_validator.py    # [YÊU CẦU 2] Yêu cầu: Viết hàm kiểm tra IP (bằng regex hoặc ipaddress module) chặn dải IP Private/Loopback/Metadata.
+│   │   ├── dns_resolver.py        # [YÊU CẦU 2] Yêu cầu: Viết hàm dùng thư viện `socket` để phân giải Hostname thành list IP.
+│   │   ├── scope_policy.py        # [YÊU CẦU 1] Yêu cầu: Viết logic áp đặt giới hạn tài nguyên (override max_depth, lọc allowed_domains) sinh ra authorized_scope chuẩn.
+│   │   └── data_sanitizer.py      # Yêu cầu: Viết hàm regex Masking (ẩn) các đoạn text nhạy cảm (như Authorization: Bearer ***, Set-Cookie: ***) trong evidence.
+│   │
+│   ├── crawler/
+│   │   ├── __init__.py            # Yêu cầu: Khởi tạo package crawler.
+│   │   ├── bfs_crawler.py         # Yêu cầu: Code thuật toán duyệt Breadth-First Search (BFS). Phải đọc `max_depth` và `allow_domains` từ ScanContext để dừng đúng lúc.
+│   │   ├── url_parser.py          # Yêu cầu: Viết hàm làm sạch URL (bỏ #fragment), nối URL tương đối (urljoin) thành URL tuyệt đối.
+│   │   └── form_parser.py         # Yêu cầu: Dùng BeautifulSoup4 tìm các thẻ `<form>`, trích xuất `action`, `method` và danh sách các thẻ `<input>`.
+│   │
+│   ├── scanners/
+│   │   ├── __init__.py            # Yêu cầu: Khởi tạo package scanners.
+│   │   ├── base_scanner.py        # Yêu cầu: Định nghĩa Abstract Class với phương thức `scan(url, context)`. Quy định chuẩn output đầu ra cho mọi scanner con.
+│   │   ├── sqli_scanner.py        # Yêu cầu: Hiện thực kiểm thử SQL Injection (chèn dấu ', OR 1=1), phân tích response xem có lỗi DB (SQL syntax error) không.
+│   │   ├── xss_scanner.py         # Yêu cầu: Hiện thực chèn payload HTML/JS. Kiểm tra payload có bị phản xạ (reflected) nguyên vẹn trên HTML response không.
+│   │   ├── csrf_scanner.py        # Yêu cầu: Kiểm tra các Form có state-changing (POST) xem có thiếu các token chống CSRF không.
+│   │   ├── ssrf_scanner.py        # Yêu cầu: Chèn các URL webhook (Interactsh) vào tham số, kiểm tra xem server mục tiêu có call ra ngoài (Out-of-band) không.
+│   │   └── security_headers_scanner.py # Yêu cầu: Parse HTTP Response Headers kiểm tra sự tồn tại của CSP, X-Frame-Options, HSTS.
+│   │
+│   ├── engine/
+│   │   ├── __init__.py            # Yêu cầu: Khởi tạo package engine.
+│   │   ├── scan_engine.py         # [YÊU CẦU 3] Yêu cầu: Viết class Orchestrator điều phối vòng lặp (gọi Crawler -> ném URL qua Scanner). Cập nhật heartbeat DB và check cờ Cancel từ Redis.
+│   │   ├── scan_context.py        # Yêu cầu: Định nghĩa Object Context lưu trữ Queue URL, set các URL đã quét, cấu hình authorized_scope (chuyển qua lại giữa các class).
+│   │   └── result_manager.py      # Yêu cầu: Viết logic lọc trùng lặp finding (so sánh vuln_type và URL param), map các lỗi tìm được với mã CWE tương ứng.
+│   │
+│   └── utils/
+│       ├── __init__.py            # Yêu cầu: Khởi tạo package utils.
+│       ├── safe_http_client.py    # [YÊU CẦU 2] Yêu cầu: Wrap thư viện `requests`. Tắt auto-redirect. Code quy trình 4 bước: Resolve DNS -> Check IP Validator -> Gắn Socket -> Header Pinning.
+│       ├── payload_loader.py      # Yêu cầu: Viết hàm đọc các file .txt trong thư mục payloads/, lưu vào biến global/RAM caching để tránh đọc đĩa I/O nhiều lần.
+│       └── logger.py              # Yêu cầu: Cấu hình module logging của Python. Tích hợp `data_sanitizer.py` vào Formatter để log ghi ra file không chứa Secret.
+│
+├── middleware/
+│   ├── __init__.py                # Yêu cầu: Khởi tạo package middleware.
+│   ├── auth_middleware.py         # Yêu cầu: Viết decorator `@token_required` chặn header `Authorization`, decode JWT, gắn `current_user` vào context `g` của Flask.
+│   ├── error_handler.py           # Yêu cầu: Đăng ký các hàm xử lý lỗi `@app.errorhandler`. Bắt các lỗi 404, 500, Custom Exceptions và trả về JSON chuẩn hóa (không leak stacktrace).
+│   └── rate_limiter.py            # Yêu cầu: Cấu hình thư viện Flask-Limiter để chống Brute-force API (ví dụ: giới hạn 5 requests/giây cho /login).
+│
+├── payloads/
+│   ├── sqli/                      # Yêu cầu: Chứa các file list payload text cho SQLi (Error based, Boolean based, Time based).
+│   ├── xss/                       # Yêu cầu: Chứa các file list payload text HTML tags và JS Event handlers cho XSS.
+│   └── headers/                   # Yêu cầu: Chứa file text danh sách các Security Headers chuẩn cần đối chiếu.
+│
+├── templates/                     
+│   ├── base.html                  # Yêu cầu: Code giao diện HTML khung (Navbar, Sidebar, Footer, load CSS/JS chung), bật Autoescape.
+│   ├── dashboard.html             # Yêu cầu: Code giao diện bảng điều khiển, dùng JS fetch API `/api/scans` định kỳ, hiển thị Progress bar và Status.
+│   ├── scan_detail.html           # Yêu cầu: Giao diện chi tiết Job. Nút Cancel gọi API update flag Redis. Hiển thị danh sách lỗ hổng real-time.
+│   └── report.html                # Yêu cầu: Template HTML được định dạng chuyên nghiệp dùng để convert sang PDF báo cáo cuối cùng.
+│
+├── static/                        
+│   ├── css/                       # Yêu cầu: Chứa các file stylesheet tùy biến giao diện web.
+│   └── js/                        # Yêu cầu: Chứa mã JavaScript frontend xử lý AJAX, render biểu đồ Chart.js.
+│
+├── reports/                       
+│   ├── pdf/                       # Yêu cầu: Thư mục vật lý lưu báo cáo PDF. Cần thiết lập quyền OS chỉ cho phép Worker/Backend ghi, không public thẳng ra web.
+│   └── txt/                       # Yêu cầu: Thư mục vật lý lưu báo cáo TXT.
+│
+└── tests/
+    ├── __init__.py                # Yêu cầu: Khởi tạo package tests.
+    ├── security/                  
+    │   ├── test_safe_http_client.py # Yêu cầu: Dựng mock server. Gửi request URL và redirect sang `127.0.0.1`. Assert xem client có văng exception SSRF không.
+    │   ├── test_dns_rebinding.py    # Yêu cầu: Mock `socket.gethostbyname` trả về IP thật lần 1, trả về Private IP lần 2. Assert client không dính bẫy kết nối.
+    │   └── test_scope_isolation.py  # Yêu cầu: Đẩy payload độc hại vào `requested_scope`, assert đầu ra `authorized_scope` đã bị override/lọc sạch bởi policy.
+    ├── worker/
+    │   ├── test_idempotency.py      # Yêu cầu: Fire liên tục 3 request tới Celery worker cùng 1 `task_lock_id`. Assert chỉ có 1 worker thực thi thành công.
+    │   └── test_graceful_cancel.py  # Yêu cầu: Mock vòng lặp Engine quét, ném flag Cancel vào Redis. Assert vòng lặp ngưng lập tức và status update CANCELLED.
+    ├── test_auth.py               # Yêu cầu: Viết Unit test chức năng đăng nhập sai pass, đúng pass, kiểm tra tính hợp lệ của token JWT.
+    └── test_sqli.py               # Yêu cầu: Chạy quét SQLi Scanner qua một route mock dính lỗi SQLi. Assert hàm scanner trả về Object Finding chính xác.

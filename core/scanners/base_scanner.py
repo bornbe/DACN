@@ -11,10 +11,13 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urljoin
 
 import requests
 
 from config.config import Config
+from core.crawler.url_parser import URLParser
+from core.security.data_sanitizer import mask_sensitive_data
 from core.utils.logger import get_logger
 from core.utils.payload_loader import PayloadLoader
 
@@ -28,6 +31,9 @@ SEVERITY_ORDER: tuple[str, ...] = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
 
 # Giới hạn độ dài bằng chứng lưu trữ, tránh phình CSDL/báo cáo
 MAX_EVIDENCE_LENGTH = 1000
+
+# Số bước redirect tối đa được theo thủ công
+MAX_REDIRECTS = 5
 
 
 @dataclass
@@ -48,6 +54,8 @@ class Finding:
         self.severity = (self.severity or "INFO").upper()
         if self.severity not in SEVERITY_ORDER:
             self.severity = "INFO"
+        self.evidence = mask_sensitive_data(self.evidence)
+        self.payload = mask_sensitive_data(self.payload)
         if self.evidence and len(self.evidence) > MAX_EVIDENCE_LENGTH:
             self.evidence = self.evidence[:MAX_EVIDENCE_LENGTH] + "...[truncated]"
 
@@ -129,17 +137,46 @@ class BaseScanner(ABC):
         session: requests.Session | None = None,
         **kwargs: Any,
     ) -> requests.Response | None:
-        """Gửi HTTP request an toàn. Trả về None nếu bị hủy hoặc gặp lỗi mạng/timeout."""
-        if self.stop_event is not None and self.stop_event.is_set():
-            return None
-        self._throttle()
+        """
+        Gửi HTTP request an toàn. Redirect 3xx được theo thủ công (tối đa MAX_REDIRECTS) và
+        chỉ khi URL đích nằm trong scope của `url` gốc; nếu ra ngoài scope, trả None và
+        không gửi request tới đích đó. Trả None nếu bị hủy hoặc gặp lỗi mạng/timeout.
+        """
         kwargs.setdefault("timeout", self.timeout)
-        kwargs.setdefault("allow_redirects", True)
-        try:
-            return (session or self.session).request(method.upper(), url, **kwargs)
-        except requests.RequestException as exc:
-            logger.warning("Lỗi mạng khi %s %s: %s", method, url, exc)
-            return None
+        follow = kwargs.pop("allow_redirects", True)
+        kwargs["allow_redirects"] = False
+        sess = session or self.session
+        scope = URLParser(url)
+        current_method = method.upper()
+        current_url = url
+        for hop in range(MAX_REDIRECTS + 1):
+            if self.stop_event is not None and self.stop_event.is_set():
+                return None
+            self._throttle()
+            try:
+                response = sess.request(current_method, current_url, **kwargs)
+            except requests.RequestException as exc:
+                logger.warning("Lỗi mạng khi %s %s: %s", current_method, current_url, exc)
+                return None
+            location = response.headers.get("Location")
+            if not follow or not (300 <= response.status_code < 400) or not location:
+                return response
+            if hop >= MAX_REDIRECTS:
+                logger.warning("Vượt quá %d lần redirect tại %s", MAX_REDIRECTS, url)
+                return None
+            target = urljoin(current_url, location)
+            if not scope.is_in_scope(target):
+                logger.warning("Chặn redirect ra ngoài scope: %s -> %s", current_url, target)
+                return None
+            if response.status_code == 303 or (
+                response.status_code in (301, 302) and current_method not in ("GET", "HEAD")
+            ):
+                current_method = "HEAD" if current_method == "HEAD" else "GET"
+                for key in ("data", "json", "files"):
+                    kwargs.pop(key, None)
+            kwargs.pop("params", None)
+            current_url = target
+        return None
 
     def _category_info(self) -> dict[str, Any]:
         if self._catalog is None:
