@@ -118,6 +118,7 @@ class ScanEngine:
                 # Giai đoạn 1: Crawl
                 self._set_status(report, "CRAWLING")
                 crawl_result = self._crawl()
+                ctx.check_cancelled()
                 pages_crawled = len(crawl_result.visited_urls)
                 report.endpoints = self._with_root_endpoint(crawl_result.endpoints)
                 if self.db is not None and self._session_id:
@@ -126,6 +127,7 @@ class ScanEngine:
                 # Giai đoạn 2: Scan
                 self._set_status(report, "SCANNING")
                 self._scan(report.endpoints, scanners)
+                ctx.check_cancelled()
 
                 report.status = "COMPLETED"
         except (ScanCancelled, KeyboardInterrupt):
@@ -155,6 +157,7 @@ class ScanEngine:
 
     def _crawl(self) -> Any:
         ctx = self.ctx
+        ctx.check_cancelled()
 
         def on_progress(pages: int, url: str) -> None:
             ctx.check_cancelled()
@@ -168,7 +171,9 @@ class ScanEngine:
             timeout=ctx.timeout,
             on_progress=on_progress,
         )
-        return crawler.crawl()
+        result = crawler.crawl()
+        ctx.check_cancelled()
+        return result
 
     def _with_root_endpoint(self, endpoints: list[EndpointDescriptor]) -> list[EndpointDescriptor]:
         """Luôn đưa trang gốc vào danh sách để các scanner cấp site (Headers) có điểm khởi đầu."""
@@ -210,7 +215,9 @@ class ScanEngine:
         for endpoint in endpoints:
             for scanner in scanners:
                 ctx.check_cancelled()
-                for finding in scanner.safe_scan(endpoint):
+                findings = scanner.safe_scan(endpoint)
+                ctx.check_cancelled()
+                for finding in findings:
                     if self.results.add(finding):
                         ctx.emit("finding", finding=finding.to_dict())
                 done += 1

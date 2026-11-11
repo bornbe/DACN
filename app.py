@@ -10,7 +10,12 @@ from flask import Flask, jsonify
 from flask.typing import ResponseReturnValue
 from sqlalchemy.orm import Session, sessionmaker
 
-from config.config import Config, get_config, validate_production_secrets
+from config.config import (
+    Config,
+    get_config,
+    validate_production_secrets,
+    validate_single_process_config,
+)
 from controllers.auth_controller import auth_blueprint
 from controllers.scan_controller import scan_blueprint
 from middleware.error_handler import register_error_handlers
@@ -27,10 +32,15 @@ def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
     if isinstance(config, dict):
         app.config.update(config)
 
+    validate_single_process_config(app.config.get("WORKER_PROCESSES", 1))
+
     # Fix review (Critical): ở production phải có secret mạnh, nếu không thì dừng khởi động.
     env = str(app.config.get("APP_ENV", "development")).lower()
     if env == "production" and not app.config.get("TESTING"):
-        validate_production_secrets(app.config["SECRET_KEY"], app.config["JWT_SECRET_KEY"])
+        validate_production_secrets(
+            app.config.get("SECRET_KEY"),
+            app.config.get("JWT_SECRET_KEY"),
+        )
 
     engine = init_db(app.config["SQLALCHEMY_DATABASE_URI"])
     session_factory: sessionmaker[Session] = get_session_factory(engine)
@@ -45,6 +55,7 @@ def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
         app,
         limit=int(app.config.get("RATE_LIMIT_MAX_REQUESTS", 60)),
         window_seconds=int(app.config.get("RATE_LIMIT_WINDOW_SECONDS", 60)),
+        trusted_proxies=app.config.get("TRUSTED_PROXIES"),
     )
 
     @app.get("/api/health")
