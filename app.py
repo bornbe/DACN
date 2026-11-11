@@ -10,7 +10,7 @@ from flask import Flask, jsonify
 from flask.typing import ResponseReturnValue
 from sqlalchemy.orm import Session, sessionmaker
 
-from config.config import Config, get_config
+from config.config import Config, get_config, validate_production_secrets
 from controllers.auth_controller import auth_blueprint
 from controllers.scan_controller import scan_blueprint
 from middleware.error_handler import register_error_handlers
@@ -26,6 +26,11 @@ def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
     app.config.from_object(config_object)
     if isinstance(config, dict):
         app.config.update(config)
+
+    # Fix review (Critical): ở production phải có secret mạnh, nếu không thì dừng khởi động.
+    env = str(app.config.get("APP_ENV", "development")).lower()
+    if env == "production" and not app.config.get("TESTING"):
+        validate_production_secrets(app.config["SECRET_KEY"], app.config["JWT_SECRET_KEY"])
 
     engine = init_db(app.config["SQLALCHEMY_DATABASE_URI"])
     session_factory: sessionmaker[Session] = get_session_factory(engine)
@@ -45,6 +50,17 @@ def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
     @app.get("/api/health")
     def health() -> ResponseReturnValue:
         return jsonify(status="ok"), 200
+
+    # Fix review (High - độ tin cậy): khôi phục các phiên quét còn dang dở khi khởi động lại.
+    if not app.config.get("TESTING"):
+        try:
+            from tasks.recovery_tasks import recover_pending_scans
+
+            recovered = recover_pending_scans(session_factory)
+            if recovered:
+                app.logger.info("Đã đưa lại %d phiên quét dang dở vào hàng đợi.", recovered)
+        except Exception:  # noqa: BLE001 - lỗi khôi phục không được chặn việc khởi động
+            app.logger.exception("Không thể khôi phục hàng đợi scan khi khởi động.")
 
     return app
 

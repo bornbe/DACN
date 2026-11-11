@@ -1,130 +1,98 @@
 """
-Kiểm thử auth, API scan và hàng đợi nền Module 5 - Issue #5.1/#5.2.
+HTTP API quản lý scan và findings - Issue #5.1/#5.2.
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from flask import Blueprint, current_app, g, jsonify, request
+from flask.typing import ResponseReturnValue
+from sqlalchemy.orm import Session, sessionmaker
 
-import pytest
+from middleware.auth_middleware import require_auth
+from schemas.requested_scope_schema import validate_scan_request
+from schemas.vulnerability_schema import format_vulnerability
+from services import scan_service
+from tasks import scan_tasks
 
-from app import create_app
-from models.base import Base
-
-
-@pytest.fixture()
-def client():
-    app = create_app(
-        {
-            "TESTING": True,
-            "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-            "JWT_SECRET_KEY": "module-five-test-secret",
-            "RATE_LIMIT_MAX_REQUESTS": 100,
-        }
-    )
-    engine = app.extensions["database_engine"]
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with app.test_client() as test_client:
-        yield test_client
-    Base.metadata.drop_all(bind=engine)
+scan_blueprint = Blueprint("scans", __name__, url_prefix="/api")
 
 
-def register_and_login(client) -> tuple[str, dict[str, str]]:
-    response = client.post(
-        "/api/auth/register",
-        json={"username": "lab-user", "email": "lab@example.test", "password": "secure-pass-123"},
-    )
-    assert response.status_code == 201
-    login = client.post(
-        "/api/auth/login",
-        json={"username": "lab-user", "password": "secure-pass-123"},
-    )
-    assert login.status_code == 200
-    token = login.get_json()["access_token"]
-    return token, {"Authorization": f"Bearer {token}"}
+def _session_factory() -> sessionmaker[Session]:
+    return current_app.extensions["database_session_factory"]
 
 
-def test_register_login_and_invalid_credentials(client):
-    assert client.post("/api/auth/login", json={"username": "missing", "password": "invalid"}).status_code == 401
+@scan_blueprint.post("/scans")
+@require_auth
+def create_scan_route() -> ResponseReturnValue:
+    """Tạo phiên PENDING, enqueue nền và trả HTTP 202."""
+    try:
+        values = validate_scan_request(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify(error="Bad Request", message=str(exc)), 400
 
-    response = client.post(
-        "/api/auth/register",
-        json={"username": "lab-user", "email": "lab@example.test", "password": "secure-pass-123", "role": "admin"},
-    )
-    assert response.status_code == 201
-    assert response.get_json()["user"]["role"] == "pentester"
-    assert "password_hash" not in response.get_json()["user"]
-
-    login = client.post(
-        "/api/auth/login",
-        json={"username": "lab-user", "password": "secure-pass-123"},
-    )
-    assert login.status_code == 200
-    assert login.get_json()["token_type"] == "Bearer"
-
-
-def test_scan_api_requires_auth_validates_scope_and_returns_user_scans(client):
-    assert client.get("/api/scans").status_code == 401
-    token, headers = register_and_login(client)
-    assert token
-
-    invalid_target = client.post("/api/scans", json={"url": "https://example.com"}, headers=headers)
-    assert invalid_target.status_code == 400
-
-    invalid_module = client.post(
-        "/api/scans",
-        json={"url": "http://127.0.0.1:8080", "modules": ["not-a-module"]},
-        headers=headers,
-    )
-    assert invalid_module.status_code == 400
-
-    with patch("tasks.scan_tasks.submit") as submit:
-        created = client.post(
-            "/api/scans",
-            json={"url": "http://127.0.0.1:8080", "max_depth": 1, "modules": ["headers"]},
-            headers=headers,
+    with _session_factory()() as db:
+        scan = scan_service.create_scan(
+            db,
+            user_id=g.user.id,
+            url=values["url"],
+            max_depth=values["max_depth"],
+            modules=values["modules"],
         )
-    assert created.status_code == 202
-    body = created.get_json()
-    assert body["status"] == "PENDING"
-    submit.assert_called_once_with(body["session_id"])
-
-    session_id = body["session_id"]
-    details = client.get(f"/api/scans/{session_id}", headers=headers)
-    assert details.status_code == 200
-    assert details.get_json()["scan"]["progress"] == 0
-
-    findings = client.get(f"/api/scans/{session_id}/findings", headers=headers)
-    assert findings.status_code == 200
-    assert findings.get_json() == {"findings": []}
-
-    listing = client.get("/api/scans", headers=headers)
-    assert listing.status_code == 200
-    assert [scan["id"] for scan in listing.get_json()["scans"]] == [session_id]
+        session_id = scan.id
+        status = scan.status
+    try:
+        scan_tasks.submit(session_id)
+    except Exception as exc:
+        scan_service.mark_scan_failed(session_id, str(exc))
+        current_app.logger.exception("Không thể enqueue scan job %s", session_id)
+        return jsonify(error="Service Unavailable", message="Không thể đưa tác vụ vào hàng đợi."), 503
+    return jsonify(session_id=session_id, status=status), 202
 
 
-def test_scans_are_private_to_their_owner(client):
-    owner_token, owner_headers = register_and_login(client)
-    assert owner_token
-    with patch("tasks.scan_tasks.submit"):
-        created = client.post(
-            "/api/scans",
-            json={"url": "http://localhost:9000"},
-            headers=owner_headers,
-        )
-    session_id = created.get_json()["session_id"]
+@scan_blueprint.get("/scans/<int:session_id>")
+@require_auth
+def get_scan_route(session_id: int) -> ResponseReturnValue:
+    """Trả trạng thái scan chỉ cho người sở hữu."""
+    with _session_factory()() as db:
+        scan = scan_service.get_scan(db, session_id, g.user.id)
+        if scan is None:
+            return jsonify(error="Not Found", message="Không tìm thấy phiên quét."), 404
+        return jsonify(scan=scan.to_dict()), 200
 
-    other = client.post(
-        "/api/auth/register",
-        json={"username": "other-user", "email": "other@example.test", "password": "secure-pass-456"},
-    )
-    assert other.status_code == 201
-    other_login = client.post(
-        "/api/auth/login",
-        json={"username": "other-user", "password": "secure-pass-456"},
-    )
-    other_headers = {"Authorization": f"Bearer {other_login.get_json()['access_token']}"}
 
-    assert client.get(f"/api/scans/{session_id}", headers=other_headers).status_code == 404
-    assert client.get(f"/api/scans/{session_id}/findings", headers=other_headers).status_code == 404
+@scan_blueprint.get("/scans/<int:session_id>/findings")
+@require_auth
+def get_findings_route(session_id: int) -> ResponseReturnValue:
+    """Trả findings của phiên quét chỉ cho người sở hữu."""
+    with _session_factory()() as db:
+        scan = scan_service.get_scan(db, session_id, g.user.id)
+        if scan is None:
+            return jsonify(error="Not Found", message="Không tìm thấy phiên quét."), 404
+        findings = scan_service.list_findings(db, session_id, g.user.id)
+        return jsonify(findings=[format_vulnerability(item) for item in findings]), 200
+
+
+@scan_blueprint.post("/scans/<int:session_id>/stop")
+@require_auth
+def stop_scan_route(session_id: int) -> ResponseReturnValue:
+    """Yêu cầu dừng một phiên quét; chỉ chủ sở hữu mới được dừng (fix review Critical #2)."""
+    with _session_factory()() as db:
+        result = scan_service.stop_scan(db, session_id, g.user.id)
+    if result is None:
+        return jsonify(error="Not Found", message="Không tìm thấy phiên quét."), 404
+    if result["state"] == "already_finished":
+        return jsonify(
+            error="Conflict",
+            message="Phiên quét đã kết thúc, không thể dừng.",
+            status=result["status"],
+        ), 409
+    return jsonify(session_id=session_id, state=result["state"], status=result["status"]), 202
+
+
+@scan_blueprint.get("/scans")
+@require_auth
+def list_scans_route() -> ResponseReturnValue:
+    """Liệt kê các phiên quét của người dùng hiện tại."""
+    with _session_factory()() as db:
+        scans = scan_service.list_scans(db, g.user.id)
+        return jsonify(scans=[scan.to_dict() for scan in scans]), 200

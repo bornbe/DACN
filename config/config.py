@@ -13,14 +13,41 @@ try:
 except ImportError:
     BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Giá trị secret mặc định (CHỈ dùng cho development) và độ dài tối thiểu bắt buộc ở production.
+DEFAULT_SECRET_KEY = "dev-secret-key-change-in-production"
+DEFAULT_JWT_SECRET_KEY = "dev-jwt-secret-key-change-in-production"
+MIN_SECRET_LENGTH = 32
+
+
+def validate_production_secrets(secret_key: str, jwt_secret_key: str) -> None:
+    """
+    Fix review (Critical): ở môi trường production, không cho phép dùng secret mặc định
+    hoặc secret quá ngắn. Nếu vi phạm, DỪNG khởi động ứng dụng để tránh bị giả mạo JWT.
+    """
+    weak: list[str] = []
+    for name, value, default in (
+        ("SECRET_KEY", secret_key, DEFAULT_SECRET_KEY),
+        ("JWT_SECRET_KEY", jwt_secret_key, DEFAULT_JWT_SECRET_KEY),
+    ):
+        if not value or value == default or len(value) < MIN_SECRET_LENGTH:
+            weak.append(name)
+    if weak:
+        raise RuntimeError(
+            "Môi trường production yêu cầu đặt biến môi trường an toàn (>= "
+            f"{MIN_SECRET_LENGTH} ký tự, không dùng giá trị mặc định) cho: "
+            + ", ".join(weak)
+        )
+
 
 class Config:
     """Cấu hình cơ sở dùng chung cho toàn hệ thống."""
 
     BASE_DIR: Path = BASE_DIR
     APP_ENV: str = os.getenv("APP_ENV", "development")
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret-key-change-in-production")
+    SECRET_KEY: str = os.getenv("SECRET_KEY", DEFAULT_SECRET_KEY)
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", DEFAULT_JWT_SECRET_KEY)
+    # Rate limiter: tin tưởng header proxy (X-Forwarded-For) hay không (mặc định: không).
+    TRUSTED_PROXY: bool = os.getenv("TRUSTED_PROXY", "false").lower() in ("1", "true", "yes")
 
     # Cấu hình Database SQLAlchemy
     SQLALCHEMY_DATABASE_URI: str = os.getenv(

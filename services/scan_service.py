@@ -5,6 +5,7 @@ Dịch vụ tạo, thực thi và truy vấn phiên quét - Issue #5.1/#5.2.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
@@ -20,6 +21,30 @@ from models.vulnerability import VulnerabilityFinding
 
 logger = logging.getLogger(__name__)
 _worker_session_factory: sessionmaker[Session] | None = None
+
+# Fix review (Critical #2): registry các phiên đang chạy -> cho phép endpoint /stop hủy giữa chừng.
+_running_scans: dict[int, threading.Event] = {}
+_running_lock = threading.Lock()
+
+
+def _register_running_scan(session_id: int, stop_event: threading.Event) -> None:
+    with _running_lock:
+        _running_scans[session_id] = stop_event
+
+
+def _unregister_running_scan(session_id: int) -> None:
+    with _running_lock:
+        _running_scans.pop(session_id, None)
+
+
+def request_stop(session_id: int) -> bool:
+    """Gửi tín hiệu hủy tới phiên đang chạy (nếu có). Trả True nếu phiên đang chạy thật."""
+    with _running_lock:
+        stop_event = _running_scans.get(session_id)
+    if stop_event is not None:
+        stop_event.set()
+        return True
+    return False
 
 
 def configure_worker_session_factory(session_factory: sessionmaker[Session]) -> None:
@@ -69,6 +94,13 @@ def run_scan(session_id: int) -> ScanReport:
         target_url = scan.target.url
         modules = list(scan.modules_enabled)
         max_depth = scan.max_depth
+        # Fix review (Critical #2): nếu đã bị yêu cầu hủy lúc còn PENDING thì không chạy.
+        if scan.status == ScanStatus.CANCELLED.value:
+            scan.end_time = scan.end_time or datetime.now(timezone.utc)
+            db.commit()
+            cancelled_report = ScanReport()
+            cancelled_report.status = ScanStatus.CANCELLED.value
+            return cancelled_report
         scan.status = ScanStatus.RUNNING.value
         scan.start_time = datetime.now(timezone.utc)
         scan.error_message = None
@@ -100,6 +132,8 @@ def run_scan(session_id: int) -> ScanReport:
             target_name=scan.target.name,
             on_event=persist_event,
         )
+        # Đăng ký cờ dừng để endpoint /stop có thể hủy phiên đang chạy.
+        _register_running_scan(session_id, context.stop_event)
         report = ScanEngine(context).run()
         scan = db.get(ScanSession, session_id)
         if scan is None:
@@ -123,6 +157,7 @@ def run_scan(session_id: int) -> ScanReport:
         logger.exception("Worker thực thi phiên quét %s thất bại", session_id)
         raise
     finally:
+        _unregister_running_scan(session_id)
         db.close()
 
 
@@ -183,6 +218,29 @@ def get_scan(db: Session, session_id: int, user_id: int | None = None) -> ScanSe
     if user_id is not None:
         query = query.filter(ScanSession.user_id == user_id)
     return query.first()
+
+
+def stop_scan(db: Session, session_id: int, user_id: int) -> dict[str, Any] | None:
+    """
+    Yêu cầu dừng một phiên quét của người dùng (fix review Critical #2).
+    - Phiên đã kết thúc (COMPLETED/FAILED/CANCELLED) -> báo already_finished.
+    - Phiên RUNNING -> gửi tín hiệu hủy cho worker (engine chuyển sang CANCELLED).
+    - Phiên PENDING (chưa chạy) -> đặt thẳng trạng thái CANCELLED.
+    Trả None nếu không tìm thấy phiên hoặc phiên không thuộc người dùng.
+    """
+    scan = get_scan(db, session_id, user_id)
+    if scan is None:
+        return None
+    finished = {ScanStatus.COMPLETED.value, ScanStatus.FAILED.value, ScanStatus.CANCELLED.value}
+    if scan.status in finished:
+        return {"state": "already_finished", "status": scan.status}
+    if scan.status == ScanStatus.RUNNING.value:
+        request_stop(session_id)
+        return {"state": "cancelling", "status": scan.status}
+    scan.status = ScanStatus.CANCELLED.value
+    scan.end_time = datetime.now(timezone.utc)
+    db.commit()
+    return {"state": "cancelled", "status": ScanStatus.CANCELLED.value}
 
 
 def list_scans(db: Session, user_id: int, limit: int = 100) -> list[ScanSession]:

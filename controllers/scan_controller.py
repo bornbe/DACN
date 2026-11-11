@@ -72,6 +72,23 @@ def get_findings_route(session_id: int) -> ResponseReturnValue:
         return jsonify(findings=[format_vulnerability(item) for item in findings]), 200
 
 
+@scan_blueprint.post("/scans/<int:session_id>/stop")
+@require_auth
+def stop_scan_route(session_id: int) -> ResponseReturnValue:
+    """Yêu cầu dừng một phiên quét; chỉ chủ sở hữu mới được dừng (fix review Critical #2)."""
+    with _session_factory()() as db:
+        result = scan_service.stop_scan(db, session_id, g.user.id)
+    if result is None:
+        return jsonify(error="Not Found", message="Không tìm thấy phiên quét."), 404
+    if result["state"] == "already_finished":
+        return jsonify(
+            error="Conflict",
+            message="Phiên quét đã kết thúc, không thể dừng.",
+            status=result["status"],
+        ), 409
+    return jsonify(session_id=session_id, state=result["state"], status=result["status"]), 202
+
+
 @scan_blueprint.get("/scans")
 @require_auth
 def list_scans_route() -> ResponseReturnValue:
