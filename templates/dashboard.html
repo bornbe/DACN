@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}Bảng điều khiển — OWASP Web Scanner{% endblock %}
+
+{% block content %}
+<div id="dashboardView">
+  <!-- Khu vực xác thực khi chưa đăng nhập -->
+  <section id="authSection" class="row justify-content-center my-4">
+    <div class="col-md-6 col-lg-5">
+      <div class="card shadow-sm border-0">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+          <span class="fw-semibold">Xác thực người dùng (JWT Auth)</span>
+          <div class="btn-group btn-group-sm" role="group" aria-label="Chuyển đổi Đăng nhập / Đăng ký">
+            <button type="button" id="tabLoginBtn" class="btn btn-light active">Đăng nhập</button>
+            <button type="button" id="tabRegisterBtn" class="btn btn-outline-light">Đăng ký</button>
+          </div>
+        </div>
+        <div class="card-body p-4">
+          <div id="authAlert" class="alert d-none" role="alert"></div>
+
+          <form id="loginForm" novalidate>
+            <div class="mb-3">
+              <label for="loginUsername" class="form-label">Tên đăng nhập</label>
+              <input type="text" id="loginUsername" name="username" class="form-control" required autocomplete="username">
+            </div>
+            <div class="mb-3">
+              <label for="loginPassword" class="form-label">Mật khẩu</label>
+              <input type="password" id="loginPassword" name="password" class="form-control" required autocomplete="current-password">
+            </div>
+            <button type="submit" id="loginSubmitBtn" class="btn btn-primary w-100">Đăng nhập vào Dashboard</button>
+          </form>
+
+          <form id="registerForm" class="d-none" novalidate>
+            <div class="mb-3">
+              <label for="regUsername" class="form-label">Tên đăng nhập (3-50 ký tự)</label>
+              <input type="text" id="regUsername" name="username" class="form-control" required autocomplete="username">
+            </div>
+            <div class="mb-3">
+              <label for="regEmail" class="form-label">Email</label>
+              <input type="email" id="regEmail" name="email" class="form-control" required autocomplete="email">
+            </div>
+            <div class="mb-3">
+              <label for="regPassword" class="form-label">Mật khẩu (tối thiểu 8 ký tự)</label>
+              <input type="password" id="regPassword" name="password" class="form-control" required autocomplete="new-password">
+            </div>
+            <button type="submit" id="registerSubmitBtn" class="btn btn-success w-100">Tạo tài khoản Pentester</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Khu vực Dashboard chính sau khi đã đăng nhập -->
+  <section id="dashboardContent" class="d-none">
+    <!-- Thẻ thống kê tổng quan -->
+    <div class="row g-3 mb-4">
+      <div class="col-6 col-lg-3">
+        <div class="card stat-card shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-muted small text-uppercase fw-semibold">Tổng số phiên quét</div>
+            <div id="statTotalScans" class="display-6 fw-bold mt-1">0</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-3">
+        <div class="card stat-card shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-muted small text-uppercase fw-semibold">Đang chạy / Hàng đợi</div>
+            <div id="statActiveScans" class="display-6 fw-bold text-primary mt-1">0</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-3">
+        <div class="card stat-card shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-muted small text-uppercase fw-semibold">Hoàn tất</div>
+            <div id="statCompletedScans" class="display-6 fw-bold text-success mt-1">0</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-6 col-lg-3">
+        <div class="card stat-card shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-muted small text-uppercase fw-semibold">Tổng lỗ hổng phát hiện</div>
+            <div id="statTotalFindings" class="display-6 fw-bold text-danger mt-1">0</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hàng: Tạo phiên quét mới + Biểu đồ phân bố mức độ nghiêm trọng -->
+    <div class="row g-4 mb-4">
+      <div class="col-lg-7">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-dark text-white fw-semibold">
+            Khởi tạo phiên quét mới (New Scan)
+          </div>
+          <div class="card-body">
+            <div id="scanFormAlert" class="alert d-none" role="alert"></div>
+            <form id="newScanForm" novalidate>
+              <div class="mb-3">
+                <label for="scanUrlInput" class="form-label fw-semibold">URL mục tiêu (chỉ cho phép localhost / loopback lab)</label>
+                <input
+                  type="url"
+                  id="scanUrlInput"
+                  name="url"
+                  class="form-control"
+                  placeholder="http://127.0.0.1:8080"
+                  required
+                >
+                <div class="form-text">
+                  Chính sách an toàn chỉ chấp nhận <code>http://localhost</code>, <code>http://127.0.0.1</code> hoặc địa chỉ loopback.
+                </div>
+              </div>
+
+              <div class="row g-3 mb-3">
+                <div class="col-sm-4">
+                  <label for="scanDepthInput" class="form-label fw-semibold">Độ sâu Crawl (0 - 5)</label>
+                  <input
+                    type="number"
+                    id="scanDepthInput"
+                    name="max_depth"
+                    class="form-control"
+                    min="0"
+                    max="5"
+                    value="2"
+                    required
+                  >
+                </div>
+                <div class="col-sm-8">
+                  <label class="form-label fw-semibold d-block">Module rà quét OWASP</label>
+                  <div class="d-flex flex-wrap gap-3 pt-1">
+                    <div class="form-check">
+                      <input class="form-check-input scan-module-checkbox" type="checkbox" value="sqli" id="modSqli" checked>
+                      <label class="form-check-label" for="modSqli">SQL Injection (<code>sqli</code>)</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input scan-module-checkbox" type="checkbox" value="xss" id="modXss" checked>
+                      <label class="form-check-label" for="modXss">Reflected XSS (<code>xss</code>)</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input scan-module-checkbox" type="checkbox" value="csrf" id="modCsrf" checked>
+                      <label class="form-check-label" for="modCsrf">Anti-CSRF (<code>csrf</code>)</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input scan-module-checkbox" type="checkbox" value="headers" id="modHeaders" checked>
+                      <label class="form-check-label" for="modHeaders">Security Headers (<code>headers</code>)</label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="d-flex justify-content-end">
+                <button type="submit" id="createScanBtn" class="btn btn-primary px-4">
+                  Bắt đầu quét
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-5">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">Tỉ lệ mức độ nghiêm trọng (Severity)</span>
+            <span class="badge bg-secondary">Chart.js</span>
+          </div>
+          <div class="card-body d-flex flex-column justify-content-between">
+            <div class="chart-wrapper mx-auto">
+              <canvas id="severityChart" width="360" height="220" aria-label="Biểu đồ phân bố mức độ nghiêm trọng"></canvas>
+            </div>
+            <div class="row text-center g-2 mt-3" id="severityLegendCounts">
+              <div class="col"><span class="badge severity-badge-critical d-block">CRITICAL</span><strong id="cntCritical">0</strong></div>
+              <div class="col"><span class="badge severity-badge-high d-block">HIGH</span><strong id="cntHigh">0</strong></div>
+              <div class="col"><span class="badge severity-badge-medium d-block">MEDIUM</span><strong id="cntMedium">0</strong></div>
+              <div class="col"><span class="badge severity-badge-low d-block">LOW</span><strong id="cntLow">0</strong></div>
+              <div class="col"><span class="badge severity-badge-info d-block">INFO</span><strong id="cntInfo">0</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Danh sách lịch sử các phiên quét -->
+    <div class="card shadow-sm">
+      <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <span class="fw-semibold">Lịch sử các phiên quét (Scan Sessions)</span>
+        <button type="button" id="refreshScansBtn" class="btn btn-outline-light btn-sm">
+          Làm mới dữ liệu
+        </button>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0" id="scansTable">
+            <thead class="table-light">
+              <tr>
+                <th>ID</th>
+                <th>Mục tiêu (Target URL)</th>
+                <th>Modules / Độ sâu</th>
+                <th>Trạng thái</th>
+                <th style="min-width: 160px;">Tiến độ</th>
+                <th>Thời gian</th>
+                <th>Phát hiện (Severity)</th>
+                <th class="text-end">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody id="scansTableBody">
+              <tr>
+                <td colspan="8" class="text-center text-muted py-4">Đang tải danh sách phiên quét...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
