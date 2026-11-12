@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Báo cáo Phiên quét #{{ report.session_id }} — OWASP Scanner{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h1 class="h3 mb-1">OWASP Automated Pentest Report</h1>
+      <p class="text-muted mb-0">Phiên kiểm thử #{{ report.session_id }} — {{ report.target_url }}</p>
+    </div>
+    <span class="badge bg-secondary fs-6">{{ report.status }}</span>
+  </div>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-header bg-dark text-white">1. Thông tin phiên kiểm thử &amp; Phạm vi (Scope)</div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6"><strong>Mục tiêu (Target):</strong> <code>{{ report.target_url }}</code></div>
+        <div class="col-md-3"><strong>Độ sâu (Max Depth):</strong> {{ report.max_depth }}</div>
+        <div class="col-md-3"><strong>Thời lượng:</strong> {{ report.duration_seconds }}s</div>
+        <div class="col-md-6"><strong>Thời gian:</strong> {{ report.start_time or '-' }} &rarr; {{ report.end_time or '-' }}</div>
+        <div class="col-md-6"><strong>Modules:</strong> {{ report.modules | join(', ') }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-header bg-dark text-white">2. Tóm lược điều hành (Executive Summary)</div>
+    <div class="card-body">
+      <div class="row text-center g-2">
+        {% for sev in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'] %}
+        <div class="col">
+          <div class="p-3 border rounded">
+            <div class="small text-muted">{{ sev }}</div>
+            <div class="fs-4 fw-bold">{{ report.summary.severity_counts.get(sev, 0) }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-header bg-dark text-white">3. Chi tiết kỹ thuật các lỗ hổng ({{ report.findings | length }})</div>
+    <div class="card-body">
+      {% if report.findings %}
+      <div class="table-responsive">
+        <table class="table table-bordered align-middle">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Mức độ</th>
+              <th>Lỗ hổng</th>
+              <th>URL &amp; Tham số</th>
+              <th>CWE / OWASP</th>
+              <th>Payload &amp; Bằng chứng</th>
+              <th>Khuyến nghị khắc phục</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in report.findings %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td><span class="badge severity-badge-{{ f.severity | lower }}">{{ f.severity }}</span></td>
+              <td class="fw-semibold">{{ f.vuln_name }}</td>
+              <td>
+                <div><code>{{ f.target_url }}</code></div>
+                <small class="text-muted">Param: {{ f.parameter or '-' }}</small>
+              </td>
+              <td>{{ f.cwe_id or '-' }}<br><small class="text-muted">{{ f.owasp_category or '-' }}</small></td>
+              <td>
+                <div><small><strong>Payload:</strong> <code>{{ f.payload or '-' }}</code></small></div>
+                <div><small><strong>Evidence:</strong> {{ f.evidence or '-' }}</small></div>
+              </td>
+              <td><small>{{ f.remediation or '-' }}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-muted mb-0">Không phát hiện lỗ hổng nào trong phạm vi kiểm thử.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

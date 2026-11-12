@@ -1,0 +1,29 @@
+# Môi trường Lab Thực nghiệm Cục bộ (DVWA & OWASP Juice Shop) - Issue #7.1
+# LƯU Ý AN TOÀN:
+# - Các cổng dịch vụ CHỈ được bind vào giao diện loopback 127.0.0.1.
+# - Tuyệt đối không mở cổng ra mạng ngoài (0.0.0.0) trên máy kết nối mạng công cộng.
+
+services:
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    container_name: owasp_scanner_lab_dvwa
+    ports:
+      - "127.0.0.1:4280:80"
+    environment:
+      - MYSQL_PASS=dvwa_local_lab_only
+    restart: "no"
+    networks:
+      - scanner_lab_net
+
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    container_name: owasp_scanner_lab_juiceshop
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: "no"
+    networks:
+      - scanner_lab_net
+
+networks:
+  scanner_lab_net:
+    driver: bridge

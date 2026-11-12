@@ -1,0 +1,131 @@
+/*
+ * Stylesheet cho OWASP Web Vulnerability Scanner Dashboard - Issue #6.1.
+ */
+
+:root {
+  --sev-critical: #8e0000;
+  --sev-high: #d9534f;
+  --sev-medium: #f0ad4e;
+  --sev-low: #0dcaf0;
+  --sev-info: #6c757d;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #1f2937;
+}
+
+.brand-shield {
+  background: linear-gradient(135deg, #dc2626, #991b1b);
+  color: #ffffff;
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.35rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+}
+
+.stat-card {
+  border-left: 4px solid #1f2937;
+  transition: transform 0.15s ease-in-out;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+}
+
+.chart-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 360px;
+  min-height: 190px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Badges mức độ nghiêm trọng (Severity) */
+.severity-badge-critical {
+  background-color: var(--sev-critical) !important;
+  color: #ffffff !important;
+}
+
+.severity-badge-high {
+  background-color: var(--sev-high) !important;
+  color: #ffffff !important;
+}
+
+.severity-badge-medium {
+  background-color: var(--sev-medium) !important;
+  color: #1f2937 !important;
+}
+
+.severity-badge-low {
+  background-color: var(--sev-low) !important;
+  color: #1f2937 !important;
+}
+
+.severity-badge-info {
+  background-color: var(--sev-info) !important;
+  color: #ffffff !important;
+}
+
+/* Badges trạng thái phiên quét (ScanStatus) */
+.status-badge-pending {
+  background-color: #6c757d !important;
+  color: #ffffff !important;
+}
+
+.status-badge-running,
+.status-badge-crawling,
+.status-badge-scanning {
+  background-color: #0d6efd !important;
+  color: #ffffff !important;
+}
+
+.status-badge-completed {
+  background-color: #198754 !important;
+  color: #ffffff !important;
+}
+
+.status-badge-failed {
+  background-color: #dc3545 !important;
+  color: #ffffff !important;
+}
+
+.status-badge-cancelled,
+.status-badge-no_modules {
+  background-color: #fd7e14 !important;
+  color: #ffffff !important;
+}
+
+/* Modal xem chi tiết lỗ hổng */
+.custom-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(15, 23, 42, 0.65);
+  z-index: 1055;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.custom-modal-dialog {
+  width: 100%;
+  max-width: 760px;
+  max-height: 90vh;
+  overflow-y: auto;
+  border: 0;
+}
+
+.finding-code-block {
+  background-color: #0f172a;
+  color: #f8fafc;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.375rem;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+}

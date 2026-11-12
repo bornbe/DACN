@@ -1,5 +1,5 @@
 """
-Application factory cho Web Backend API - Issue #5.1/#5.2.
+Application factory cho Web Backend API & Dashboard - Issue #5.1/#5.2/#6.1/#6.2.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from config.config import (
     validate_single_process_config,
 )
 from controllers.auth_controller import auth_blueprint
+from controllers.report_controller import report_blueprint
 from controllers.scan_controller import scan_blueprint
 from middleware.error_handler import register_error_handlers
 from middleware.rate_limiter import init_rate_limiter
@@ -25,7 +26,7 @@ from services.scan_service import configure_worker_session_factory
 
 
 def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
-    """Tạo Flask app, database, middleware và API blueprints."""
+    """Tạo Flask app, database, middleware và API/Dashboard blueprints."""
     app = Flask(__name__)
     config_object = config if config is not None and not isinstance(config, dict) else get_config()
     app.config.from_object(config_object)
@@ -50,6 +51,7 @@ def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
 
     app.register_blueprint(auth_blueprint)
     app.register_blueprint(scan_blueprint)
+    app.register_blueprint(report_blueprint)
     register_error_handlers(app)
     init_rate_limiter(
         app,
