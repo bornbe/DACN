@@ -3,7 +3,9 @@ SafeHTTPClient: Lớp bọc (wrapper) an toàn quanh `requests.Session` - Yêu c
 
 Quy trình bảo vệ 4 bước trên mỗi HTTP request và mỗi bước chuyển hướng (Redirect):
 1. Xác thực URL theo chính sách Loopback (`validate_target_url`) và phân giải DNS bước 1.
-2. Phân giải và xác minh lại IP ngay trước khi kết nối socket (chống DNS Rebinding TOCTOU).
+2. Phân giải và xác minh lại IP ngay trước khi kết nối, rồi **ghim socket thẳng vào IP
+   loopback đã xác minh** (`resolve_pinned_connection`) để chống DNS Rebinding TOCTOU —
+   không để `requests` phân giải DNS lại lúc mở kết nối.
 3. Gắn cố định header `Host` (Header Pinning) và cưỡng bức `allow_redirects=False`, không cho phép `verify=False`.
 4. Nếu có phản hồi 3xx kèm `Location`, kiểm tra lại đích redirect theo chính sách Loopback + Scope trước khi theo tiếp.
 """
@@ -11,17 +13,16 @@ Quy trình bảo vệ 4 bước trên mỗi HTTP request và mỗi bước chuy�
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlsplit
 
 import requests
 
 from config.config import Config
-from core.security.dns_resolver import DNSResolutionError, ResolverFunc, resolve_hostname
+from core.security.connection_pinning import resolve_pinned_connection
+from core.security.dns_resolver import ResolverFunc
 from core.security.scope_policy import validate_redirect_target
 from core.security.target_validator import (
     SSRFBlockedError,
     TargetValidationError,
-    validate_resolved_ips,
     validate_target_url,
 )
 
@@ -53,22 +54,6 @@ class SafeHTTPClient:
         self.resolver: ResolverFunc | None = resolver
         self.session.headers.setdefault("User-Agent", user_agent)
 
-    def _verify_pre_connect_dns(self, url: str) -> str:
-        """
-        Bước 2: Phân giải DNS lần thứ hai ngay trước khi tạo kết nối để phát hiện DNS Rebinding
-        (trường hợp lần phân giải đầu trả về 127.0.0.1 nhưng lần kết nối thực tế đổi sang IP khác).
-        """
-        parsed = urlsplit(url)
-        hostname = (parsed.hostname or "").lower().rstrip(".")
-        try:
-            ips = resolve_hostname(hostname, resolver=self.resolver)
-        except DNSResolutionError as exc:
-            raise SSRFBlockedError(
-                "Không thể phân giải DNS an toàn trước khi kết nối."
-            ) from exc
-        validate_resolved_ips(hostname, ips)
-        return parsed.netloc
-
     def request(
         self,
         method: str,
@@ -96,15 +81,17 @@ class SafeHTTPClient:
         current_url = url
 
         for hop in range(self.max_redirects + 1):
-            # Bước 2: Kiểm tra chống DNS Rebinding ngay trước khi gửi request
-            netloc = self._verify_pre_connect_dns(current_url)
+            # Bước 2: Chống DNS Rebinding + ghim socket thẳng vào IP loopback đã xác minh.
+            # `current_url` (hostname) vẫn được giữ cho kiểm tra scope/redirect bên dưới;
+            # chỉ `pinned.connect_url` (đã thay host bằng IP) được dùng để mở socket.
+            pinned = resolve_pinned_connection(current_url, resolver=self.resolver)
 
             # Bước 3: Pinning header Host và gửi request với allow_redirects=False
             req_headers = dict(kwargs.get("headers") or {})
-            req_headers.setdefault("Host", netloc)
+            req_headers.setdefault("Host", pinned.host_header)
             kwargs["headers"] = req_headers
 
-            response = self.session.request(current_method, current_url, **kwargs)
+            response = self.session.request(current_method, pinned.connect_url, **kwargs)
 
             location = response.headers.get("Location")
             if not allow_redirects or not (300 <= response.status_code < 400) or not location:

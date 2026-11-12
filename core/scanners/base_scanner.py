@@ -17,6 +17,7 @@ import requests
 
 from config.config import Config
 from core.crawler.url_parser import URLParser
+from core.security.connection_pinning import resolve_pinned_connection
 from core.security.data_sanitizer import mask_sensitive_data
 from core.security.target_validator import validate_target_url
 from core.utils.logger import get_logger
@@ -162,12 +163,19 @@ class BaseScanner(ABC):
                 return None
             try:
                 validate_target_url(current_url)
+                # Ghim socket vào IP loopback đã xác minh (chống DNS Rebinding TOCTOU).
+                # SSRFBlockedError/TargetValidationError/DNSResolutionError đều là ValueError
+                # nên được nuốt mềm (trả None) như các lỗi chính sách khác.
+                pinned = resolve_pinned_connection(current_url)
             except ValueError as exc:
                 logger.warning("Chặn kết nối ngoài loopback/DNS không an toàn: %s", exc)
                 return None
             self._throttle()
+            req_headers = dict(kwargs.get("headers") or {})
+            req_headers.setdefault("Host", pinned.host_header)
+            kwargs["headers"] = req_headers
             try:
-                response = sess.request(current_method, current_url, **kwargs)
+                response = sess.request(current_method, pinned.connect_url, **kwargs)
             except (requests.RequestException, ValueError) as exc:
                 logger.warning("Lỗi mạng/URL khi %s %s: %s", current_method, current_url, exc)
                 return None
