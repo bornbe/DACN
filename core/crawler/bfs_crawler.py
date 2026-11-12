@@ -2,22 +2,27 @@
 Thuật toán thu thập liên kết theo chiều rộng (BFS Crawler) và kiểm soát phạm vi - Issue #2.1.
 Duyệt đệ quy website mục tiêu theo cấu trúc đồ thị BFS, sử dụng hàng đợi FIFO
 (collections.deque) kết hợp tập visited_urls để chống trùng lặp và vòng lặp vô hạn.
-Tối ưu hiệu năng HTTP bằng requests.Session (Connection Pooling).
+Mọi HTTP request đi qua SafeHTTPClient dùng chung (fix review #2): cùng một đường kết nối
+an toàn (xác thực scope + loopback, chống DNS rebinding, kiểm tra lại từng bước redirect),
+không gọi requests.Session trực tiếp để tránh bỏ qua lớp bảo vệ.
 """
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable
-from urllib.parse import urljoin
+from typing import Any, Callable, TYPE_CHECKING
 
 import requests
 
 from config.config import Config
 from core.crawler.form_parser import EndpointDescriptor, FormParser
 from core.crawler.url_parser import URLParser
-from core.security.target_validator import validate_target_url
+from core.security.dns_resolver import DNSResolutionError
+from core.security.target_validator import SSRFBlockedError, TargetValidationError
+
+if TYPE_CHECKING:  # chỉ cho type-checker; import thật thực hiện trễ trong __init__ (tránh vòng import)
+    from core.utils.safe_http_client import SafeHTTPClient
 
 # Hàm callback báo tiến độ: nhận (số trang đã quét, URL hiện tại)
 ProgressCallback = Callable[[int, str], None]
@@ -61,6 +66,7 @@ class BFSCrawler:
         max_pages: int | None = None,
         timeout: int | None = None,
         session: requests.Session | None = None,
+        http_client: SafeHTTPClient | None = None,
         user_agent: str = "OWASP-Scanner-Crawler/1.0",
         on_progress: ProgressCallback | None = None,
     ) -> None:
@@ -70,9 +76,17 @@ class BFSCrawler:
         self.timeout: int = timeout if timeout is not None else Config.DEFAULT_REQUEST_TIMEOUT
         self.on_progress = on_progress
 
-        # Dùng chung một Session để tái sử dụng kết nối TCP (Connection Pooling)
-        self.session: requests.Session = session or requests.Session()
-        self.session.headers.update({"User-Agent": user_agent})
+        # Fix review #2: mọi request đi qua SafeHTTPClient (có thể tiêm http_client để test).
+        # SafeHTTPClient tự xác thực scope/loopback, chống DNS rebinding và kiểm soát redirect.
+        # Import trễ tại đây để tránh vòng import (scope_policy <-> core.crawler).
+        from core.utils.safe_http_client import SafeHTTPClient
+
+        self.http: SafeHTTPClient = http_client or SafeHTTPClient(
+            session=session,
+            timeout=self.timeout,
+            max_redirects=MAX_REDIRECTS,
+            user_agent=user_agent,
+        )
 
         self.url_parser = URLParser(self.base_url)
         self.form_parser = FormParser(self.url_parser)
@@ -138,38 +152,20 @@ class BFSCrawler:
 
     def _fetch_page(self, url: str) -> tuple[str, str] | None:
         """
-        Tải trang và trả về (html, url thật của trang) hoặc None.
-        Chuyển hướng được theo thủ công từng bước và bị dừng nếu rời khỏi phạm vi mục tiêu
-        hoặc ngoài chính sách loopback, tránh crawl sang domain ngoài scope.
+        Tải trang qua SafeHTTPClient và trả về (html, url thật sau redirect) hoặc None.
+        SafeHTTPClient tự xác thực loopback/scope và kiểm tra lại từng bước chuyển hướng; nếu URL,
+        DNS hoặc redirect vi phạm chính sách thì ném ngoại lệ và ta bỏ qua trang (crawl không sập).
         """
-        current = url
-        response: requests.Response | None = None
-        for _ in range(MAX_REDIRECTS + 1):
-            try:
-                validate_target_url(current)
-                response = self.session.get(current, timeout=self.timeout, allow_redirects=False)
-            except (requests.RequestException, ValueError):
-                return None
-
-            location = response.headers.get("Location") if response.is_redirect else None
-            if not location:
-                break
-            try:
-                candidate = urljoin(current, location.strip())
-                validate_target_url(candidate)
-                target = self.url_parser.normalize(candidate)
-                in_scope = self.url_parser.is_in_scope(target)
-            except ValueError:
-                return None
-            if not in_scope:
-                return None
-            current = target
-        else:
-            return None  # vượt quá số lần chuyển hướng cho phép
+        try:
+            response = self.http.get(url, allow_redirects=True)
+        except (SSRFBlockedError, TargetValidationError, DNSResolutionError,
+                requests.RequestException, ValueError):
+            return None
 
         if response is None or response.status_code >= 400:
             return None
 
+        final_url = response.url or url
         content_type = response.headers.get("Content-Type", "").lower()
         media_type = content_type.split(";")[0].strip()
         if "charset" not in content_type:
@@ -177,10 +173,10 @@ class BFSCrawler:
             response.encoding = response.apparent_encoding or response.encoding
 
         if media_type in HTML_CONTENT_TYPES:
-            return response.text, current
+            return response.text, final_url
         text = response.text
         if self._looks_like_html(text):
-            return text, current
+            return text, final_url
         return None
 
     @staticmethod
