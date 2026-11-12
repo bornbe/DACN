@@ -1,3 +1,35 @@
-# scannerweb structure created from owasp_scanner_web_fake.txt
+# Environment & secrets (never commit real .env)
 .env
-.env.example
+.env.*
+!.env.example
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local databases & Flask instance
+*.db
+*.sqlite
+*.sqlite3
+instance/
+
+# Runtime generated reports & benchmark artifacts (keep .gitkeep & sample fixtures)
+reports/pdf/*
+!reports/pdf/.gitkeep
+reports/txt/*
+!reports/txt/.gitkeep
+reports/*.json
+reports/*.txt
+reports/*.pdf
+benchmark/artifacts/

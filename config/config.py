@@ -126,9 +126,10 @@ class Config:
     DEFAULT_MAX_PAGES: int = int(os.getenv("DEFAULT_MAX_PAGES", "100"))
     DEFAULT_REQUEST_TIMEOUT: int = int(os.getenv("DEFAULT_REQUEST_TIMEOUT", "10"))
 
-    # Đường dẫn thư mục tài nguyên mẫu kiểm thử và báo cáo
+    # Đường dẫn thư mục tài nguyên mẫu kiểm thử, báo cáo và font Unicode PDF tùy chọn
     PAYLOADS_DIR: Path = BASE_DIR / "payloads"
     REPORTS_DIR: Path = BASE_DIR / "reports"
+    REPORT_UNICODE_FONT_PATH: str = os.getenv("REPORT_UNICODE_FONT_PATH", "")
 
 
 class DevelopmentConfig(Config):

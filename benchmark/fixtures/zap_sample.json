@@ -1,0 +1,32 @@
+{
+  "_comment": "Tệp mẫu giả lập (synthetic fixture) theo cấu trúc OWASP ZAP JSON dùng để kiểm thử CLI benchmark/evaluate.py offline.",
+  "is_synthetic_fixture": true,
+  "duration_seconds": 12.0,
+  "site": [
+    {
+      "@name": "http://127.0.0.1:3000",
+      "alerts": [
+        {
+          "alert": "Content Security Policy (CSP) Header Not Set",
+          "cweid": "693",
+          "instances": [
+            {
+              "uri": "http://127.0.0.1:3000/",
+              "param": ""
+            }
+          ]
+        },
+        {
+          "alert": "Absence of Anti-CSRF Tokens",
+          "cweid": "352",
+          "instances": [
+            {
+              "uri": "http://127.0.0.1:3000/profile",
+              "param": "username"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

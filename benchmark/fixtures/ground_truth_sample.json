@@ -1,0 +1,34 @@
+{
+  "_comment": "Tệp mẫu giả lập (synthetic fixture) chỉ dùng để kiểm thử CLI benchmark/evaluate.py offline, KHÔNG phải số liệu thực nghiệm thực tế.",
+  "is_synthetic_fixture": true,
+  "metadata": {
+    "target": "http://127.0.0.1:3000",
+    "description": "Ground Truth mẫu cục bộ phục vụ kiểm thử công cụ đánh giá"
+  },
+  "ground_truth": [
+    {
+      "vuln_category": "sqli",
+      "target_url": "http://127.0.0.1:3000/rest/products/search",
+      "parameter": "q",
+      "cwe_id": "CWE-89"
+    },
+    {
+      "vuln_category": "xss",
+      "target_url": "http://127.0.0.1:3000/search",
+      "parameter": "q",
+      "cwe_id": "CWE-79"
+    },
+    {
+      "vuln_category": "csrf",
+      "target_url": "http://127.0.0.1:3000/profile",
+      "parameter": "username",
+      "cwe_id": "CWE-352"
+    },
+    {
+      "vuln_category": "headers",
+      "target_url": "http://127.0.0.1:3000/",
+      "parameter": "",
+      "cwe_id": "CWE-693"
+    }
+  ]
+}

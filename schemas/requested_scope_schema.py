@@ -1,57 +1,15 @@
 """
 Kiểm tra phạm vi mục tiêu quét và module được yêu cầu - Issue #5.1/#5.2.
-Chỉ cho phép host loopback/localhost để API phục vụ môi trường lab cục bộ.
+Tái sử dụng bộ kiểm tra dùng chung tại `core.security` để đồng bộ chính sách Loopback giữa API, CLI và Engine.
 """
 
 from __future__ import annotations
 
-import ipaddress
 from typing import Any
-from urllib.parse import urlsplit
 
 from config.config import Config
-from core.scanners import ALL_MODULES
-
-MAX_SCAN_DEPTH = 5
-
-
-def validate_target_url(value: Any) -> str:
-    """Chỉ chấp nhận URL HTTP(S) trỏ tới loopback hoặc tên miền localhost."""
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("url là bắt buộc.")
-    url = value.strip()
-    try:
-        parsed = urlsplit(url)
-        hostname = (parsed.hostname or "").lower().rstrip(".")
-        parsed.port
-    except ValueError as exc:
-        raise ValueError("URL không hợp lệ.") from exc
-    if parsed.scheme not in {"http", "https"} or not hostname or parsed.username or parsed.password:
-        raise ValueError("URL phải dùng HTTP(S), có hostname và không chứa thông tin xác thực.")
-    is_localhost = hostname == "localhost" or hostname.endswith(".localhost")
-    try:
-        is_loopback_ip = ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        is_loopback_ip = False
-    if not (is_localhost or is_loopback_ip):
-        raise ValueError("Chỉ chấp nhận mục tiêu lab trên localhost hoặc địa chỉ loopback.")
-    return url
-
-
-def validate_modules(value: Any) -> list[str]:
-    """Kiểm tra danh sách module theo registry ALL_MODULES."""
-    if value is None:
-        return list(ALL_MODULES)
-    if not isinstance(value, list) or any(not isinstance(module, str) for module in value):
-        raise ValueError("modules phải là danh sách tên module.")
-    modules: list[str] = []
-    for module in value:
-        normalized = module.strip().lower()
-        if normalized not in ALL_MODULES:
-            raise ValueError(f"Module không được hỗ trợ: {module}.")
-        if normalized not in modules:
-            modules.append(normalized)
-    return modules or list(ALL_MODULES)
+from core.security.scope_policy import MAX_SCAN_DEPTH, validate_modules
+from core.security.target_validator import validate_target_url
 
 
 def validate_scan_request(data: Any) -> dict[str, Any]:
@@ -67,3 +25,11 @@ def validate_scan_request(data: Any) -> dict[str, Any]:
         "max_depth": max_depth,
         "modules": validate_modules(data.get("modules")),
     }
+
+
+__all__ = [
+    "MAX_SCAN_DEPTH",
+    "validate_modules",
+    "validate_scan_request",
+    "validate_target_url",
+]

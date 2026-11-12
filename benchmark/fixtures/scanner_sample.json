@@ -1,0 +1,30 @@
+{
+  "_comment": "Tệp mẫu giả lập (synthetic fixture) của OWASP Scanner dùng để kiểm thử CLI benchmark/evaluate.py offline.",
+  "is_synthetic_fixture": true,
+  "target_url": "http://127.0.0.1:3000",
+  "status": "COMPLETED",
+  "duration_seconds": 6.5,
+  "findings": [
+    {
+      "vuln_name": "SQL Injection (Error-based)",
+      "severity": "HIGH",
+      "target_url": "http://127.0.0.1:3000/rest/products/search?q=test",
+      "parameter": "q",
+      "cwe_id": "CWE-89"
+    },
+    {
+      "vuln_name": "Unencoded Input Reflection (Needs Review)",
+      "severity": "LOW",
+      "target_url": "http://127.0.0.1:3000/search",
+      "parameter": "q",
+      "cwe_id": "CWE-79"
+    },
+    {
+      "vuln_name": "Missing Security Header: X-Frame-Options",
+      "severity": "MEDIUM",
+      "target_url": "http://127.0.0.1:3000/",
+      "parameter": null,
+      "cwe_id": "CWE-1021"
+    }
+  ]
+}

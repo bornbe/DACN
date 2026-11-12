@@ -1,7 +1,7 @@
 """
 Lớp trừu tượng BaseScanner và cấu trúc Finding - Issue #3.1.
 Chuẩn hóa giao diện cho mọi loại Scanner (Headers, CSRF, SQLi, XSS...), tích hợp
-giới hạn tốc độ (rate limiting) và xử lý lỗi mạng mềm mại để không làm sập tiến trình quét.
+giới hạn tốc độ (rate limiting), kiểm tra chính sách Loopback và xử lý lỗi mạng mềm mại.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import requests
 from config.config import Config
 from core.crawler.url_parser import URLParser
 from core.security.data_sanitizer import mask_sensitive_data
+from core.security.target_validator import validate_target_url
 from core.utils.logger import get_logger
 from core.utils.payload_loader import PayloadLoader
 
@@ -139,15 +140,16 @@ class BaseScanner(ABC):
     ) -> requests.Response | None:
         """
         Gửi HTTP request an toàn. Redirect 3xx được theo thủ công (tối đa MAX_REDIRECTS) và
-        chỉ khi URL đích nằm trong scope của `url` gốc; nếu ra ngoài scope, trả None và
-        không gửi request tới đích đó. Trả None nếu bị hủy, URL sai định dạng hoặc lỗi mạng/timeout.
+        chỉ khi URL đích nằm trong scope của `url` gốc và tuân thủ chính sách Loopback;
+        nếu ra ngoài scope/loopback, trả None và không gửi request tới đích đó.
         """
         if self.stop_event is not None and self.stop_event.is_set():
             return None
         try:
+            validate_target_url(url)
             scope = URLParser(url)
         except ValueError as exc:
-            logger.warning("URL không hợp lệ %s: %s", url, exc)
+            logger.warning("URL không hợp lệ hoặc ngoài phạm vi loopback: %s", exc)
             return None
         kwargs.setdefault("timeout", self.timeout)
         follow = kwargs.pop("allow_redirects", True)
@@ -157,6 +159,11 @@ class BaseScanner(ABC):
         current_url = url
         for hop in range(MAX_REDIRECTS + 1):
             if self.stop_event is not None and self.stop_event.is_set():
+                return None
+            try:
+                validate_target_url(current_url)
+            except ValueError as exc:
+                logger.warning("Chặn kết nối ngoài loopback/DNS không an toàn: %s", exc)
                 return None
             self._throttle()
             try:
@@ -172,6 +179,7 @@ class BaseScanner(ABC):
                 return None
             try:
                 target = urljoin(current_url, location.strip())
+                validate_target_url(target)
                 URLParser.normalize(target)
                 in_scope = scope.is_in_scope(target)
             except ValueError as exc:

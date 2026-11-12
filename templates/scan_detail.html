@@ -1,0 +1,214 @@
+<<<<<<< Updated upstream
+=======
+{% extends "base.html" %}
+{% block title %}Chi tiết Phiên quét #{{ session_id }} — OWASP Web Scanner{% endblock %}
+
+{% block content %}
+<div id="scanDetailView" data-session-id="{{ session_id }}">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+      <a href="{{ url_for('reports.dashboard_page') }}" class="btn btn-outline-secondary btn-sm mb-2">
+        &larr; Quay lại Dashboard
+      </a>
+      <h1 class="h3 mb-0">
+        Phiên quét #<span id="detailSessionId">{{ session_id }}</span>
+        <span id="detailStatusBadge" class="badge bg-secondary ms-2">ĐANG TẢI</span>
+      </h1>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <button type="button" id="stopScanBtn" class="btn btn-danger btn-sm d-none">
+        Dừng phiên quét
+      </button>
+      <button type="button" id="downloadTxtBtn" class="btn btn-outline-dark btn-sm">
+        Tải báo cáo TXT
+      </button>
+      <button type="button" id="downloadPdfBtn" class="btn btn-dark btn-sm">
+        Tải báo cáo PDF
+      </button>
+    </div>
+  </div>
+
+  <div id="detailAlert" class="alert d-none" role="alert"></div>
+
+  <!-- Thông tin phiên & Thanh tiến trình Polling -->
+  <div class="row g-4 mb-4">
+    <div class="col-lg-8">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+          <span class="fw-semibold">Tiến độ &amp; Cấu hình Phiên quét</span>
+          <span id="pollingIndicator" class="badge bg-info text-dark">Đang đồng bộ...</span>
+        </div>
+        <div class="card-body">
+          <div class="mb-3">
+            <div class="d-flex justify-content-between mb-1">
+              <span class="fw-semibold">Tiến độ thực thi</span>
+              <span id="detailProgressText" class="fw-bold">0%</span>
+            </div>
+            <div class="progress" style="height: 22px;">
+              <div
+                id="detailProgressBar"
+                class="progress-bar progress-bar-striped progress-bar-animated"
+                role="progressbar"
+                style="width: 0%;"
+                aria-valuenow="0"
+                aria-valuemin="0"
+                aria-valuemax="100"
+              >0%</div>
+            </div>
+          </div>
+
+          <div class="row g-3 small">
+            <div class="col-md-6">
+              <div class="text-muted">URL mục tiêu</div>
+              <div class="fw-semibold"><code id="detailTargetUrl">-</code></div>
+            </div>
+            <div class="col-md-3">
+              <div class="text-muted">Độ sâu tối đa</div>
+              <div id="detailMaxDepth" class="fw-semibold">-</div>
+            </div>
+            <div class="col-md-3">
+              <div class="text-muted">Modules kích hoạt</div>
+              <div id="detailModules" class="fw-semibold">-</div>
+            </div>
+            <div class="col-md-6">
+              <div class="text-muted">Thời gian bắt đầu</div>
+              <div id="detailStartTime" class="fw-semibold">-</div>
+            </div>
+            <div class="col-md-6">
+              <div class="text-muted">Thời gian kết thúc</div>
+              <div id="detailEndTime" class="fw-semibold">-</div>
+            </div>
+          </div>
+
+          <div id="detailErrorBox" class="alert alert-warning mt-3 mb-0 d-none"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-dark text-white fw-semibold">
+          Phân bố lỗ hổng theo mức độ
+        </div>
+        <div class="card-body d-flex flex-column justify-content-between">
+          <div class="chart-wrapper mx-auto">
+            <canvas id="detailSeverityChart" width="320" height="190" aria-label="Biểu đồ lỗ hổng phiên quét"></canvas>
+          </div>
+          <div class="row text-center g-1 mt-2">
+            <div class="col"><span class="badge severity-badge-critical d-block">CRIT</span><strong id="detailCntCritical">0</strong></div>
+            <div class="col"><span class="badge severity-badge-high d-block">HIGH</span><strong id="detailCntHigh">0</strong></div>
+            <div class="col"><span class="badge severity-badge-medium d-block">MED</span><strong id="detailCntMedium">0</strong></div>
+            <div class="col"><span class="badge severity-badge-low d-block">LOW</span><strong id="detailCntLow">0</strong></div>
+            <div class="col"><span class="badge severity-badge-info d-block">INFO</span><strong id="detailCntInfo">0</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bảng danh sách lỗ hổng phát hiện kèm bộ lọc client-side -->
+  <div class="card shadow-sm">
+    <div class="card-header bg-dark text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <span class="fw-semibold">Danh sách Lỗ hổng Phát hiện (<span id="findingsCountBadge">0</span>)</span>
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <select
+          id="findingSeverityFilter"
+          class="form-select form-select-sm"
+          style="width: auto;"
+          aria-label="Lọc theo mức độ nghiêm trọng"
+        >
+          <option value="ALL">Tất cả mức độ</option>
+          <option value="CRITICAL">CRITICAL</option>
+          <option value="HIGH">HIGH</option>
+          <option value="MEDIUM">MEDIUM</option>
+          <option value="LOW">LOW</option>
+          <option value="INFO">INFO</option>
+        </select>
+        <input
+          type="search"
+          id="findingKeywordFilter"
+          class="form-control form-control-sm"
+          style="min-width: 240px;"
+          placeholder="Lọc theo URL, loại lỗ hổng, param, CWE..."
+          aria-label="Lọc lỗ hổng theo từ khóa"
+        >
+        <button type="button" id="clearFindingFilterBtn" class="btn btn-outline-light btn-sm">
+          Xóa lọc
+        </button>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0" id="findingsTable">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Mức độ (Severity)</th>
+              <th>Loại lỗ hổng</th>
+              <th>URL bị ảnh hưởng</th>
+              <th>Tham số (Param)</th>
+              <th>CWE / OWASP</th>
+              <th class="text-end">Chi tiết</th>
+            </tr>
+          </thead>
+          <tbody id="findingsTableBody">
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">Chưa có phát hiện lỗ hổng nào.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal hiển thị chi tiết lỗ hổng (An toàn XSS: chỉ gán qua textContent) -->
+  <div
+    id="findingDetailModal"
+    class="custom-modal-backdrop d-none"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="modalVulnTitle"
+  >
+    <div class="custom-modal-dialog card shadow-lg">
+      <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <div>
+          <span id="modalSeverityBadge" class="badge me-2">INFO</span>
+          <strong id="modalVulnTitle">Chi tiết lỗ hổng</strong>
+        </div>
+        <button type="button" id="closeFindingModalBtn" class="btn btn-sm btn-outline-light" aria-label="Đóng">
+          &times; Đóng
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-8">
+            <div class="text-muted small fw-semibold">URL bị ảnh hưởng (Target URL)</div>
+            <pre id="modalTargetUrl" class="finding-code-block mb-0">-</pre>
+          </div>
+          <div class="col-md-4">
+            <div class="text-muted small fw-semibold">Tham số (Parameter)</div>
+            <pre id="modalParameter" class="finding-code-block mb-0">-</pre>
+          </div>
+          <div class="col-md-12">
+            <div class="text-muted small fw-semibold">Phân loại CWE / OWASP</div>
+            <div id="modalCweOwasp" class="fw-semibold">-</div>
+          </div>
+          <div class="col-md-12">
+            <div class="text-muted small fw-semibold">Payload kiểm thử đã gửi</div>
+            <pre id="modalPayload" class="finding-code-block mb-0">-</pre>
+          </div>
+          <div class="col-md-12">
+            <div class="text-muted small fw-semibold">Bằng chứng kỹ thuật (Evidence)</div>
+            <pre id="modalEvidence" class="finding-code-block mb-0">-</pre>
+          </div>
+          <div class="col-md-12">
+            <div class="text-muted small fw-semibold">Khuyến nghị khắc phục (Remediation)</div>
+            <div id="modalRemediation" class="p-2 bg-light border rounded">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+>>>>>>> Stashed changes

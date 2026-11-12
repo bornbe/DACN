@@ -3,7 +3,7 @@ Giao diện dòng lệnh CLI - Issue #4.2.
 
 Ví dụ:
     python scanner.py -u http://127.0.0.1:8080 -d 2 -m headers,csrf -o report.json
-    python scanner.py -u http://example.local -m all -o report.pdf --no-db
+    python scanner.py -u http://localhost:3000 -m all -o report.pdf --no-db
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Any
 from core.engine.scan_context import ScanContext
 from core.engine.scan_engine import ScanEngine, normalize_modules
 from core.scanners import ALL_MODULES
+from core.security.target_validator import validate_target_url
 from services.report_service import SUPPORTED_FORMATS, export_report, render_markdown_table
 
 BAR_WIDTH = 30
@@ -24,9 +25,17 @@ BAR_WIDTH = 30
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scanner.py",
-        description="OWASP Automated Pentest Scanner - công cụ quét lỗ hổng web tự động.",
+        description=(
+            "OWASP Automated Pentest Scanner - công cụ quét lỗ hổng web tự động "
+            "(chỉ cho phép mục tiêu lab trên localhost hoặc địa chỉ loopback 127.0.0.0/8, ::1)."
+        ),
     )
-    parser.add_argument("-u", "--url", required=True, help="URL mục tiêu (http:// hoặc https://).")
+    parser.add_argument(
+        "-u",
+        "--url",
+        required=True,
+        help="URL mục tiêu thuộc localhost/loopback (ví dụ http://127.0.0.1:8080 hoặc http://localhost:3000).",
+    )
     parser.add_argument("-d", "--depth", type=int, default=2, help="Độ sâu crawler (mặc định 2).")
     parser.add_argument(
         "-m",
@@ -84,6 +93,11 @@ class ProgressBar:
 
 
 def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[str]:
+    try:
+        args.url = validate_target_url(args.url)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     modules = normalize_modules([m for m in args.modules.split(",")])
     invalid = [m for m in modules if m not in ALL_MODULES]
     if invalid:

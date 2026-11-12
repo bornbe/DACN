@@ -19,6 +19,7 @@ from core.crawler.form_parser import EndpointDescriptor
 from core.engine.result_manager import ResultManager
 from core.engine.scan_context import ScanCancelled, ScanContext
 from core.scanners import ALL_MODULES, BaseScanner, Finding, load_scanner_class
+from core.security.target_validator import validate_target_url
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -151,9 +152,7 @@ class ScanEngine:
     # ------------------------------------------------------------------ steps
     @staticmethod
     def _validate_target(url: str) -> None:
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError(f"URL mục tiêu không hợp lệ (cần http:// hoặc https://): {url}")
+        validate_target_url(url)
 
     def _crawl(self) -> Any:
         ctx = self.ctx

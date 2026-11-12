@@ -17,6 +17,7 @@ import requests
 from config.config import Config
 from core.crawler.form_parser import EndpointDescriptor, FormParser
 from core.crawler.url_parser import URLParser
+from core.security.target_validator import validate_target_url
 
 # Hàm callback báo tiến độ: nhận (số trang đã quét, URL hiện tại)
 ProgressCallback = Callable[[int, str], None]
@@ -49,8 +50,8 @@ class CrawlResult:
 class BFSCrawler:
     """
     Bộ thu thập liên kết Web theo thuật toán Duyệt theo chiều rộng (BFS).
-    Chỉ crawl trong phạm vi Hostname mục tiêu, có kiểm soát độ sâu (max_depth),
-    số trang tối đa (max_pages) và thời gian chờ mỗi request (timeout).
+    Chỉ crawl trong phạm vi Hostname mục tiêu và tuân thủ chính sách Loopback,
+    có kiểm soát độ sâu (max_depth), số trang tối đa (max_pages) và timeout.
     """
 
     def __init__(
@@ -138,13 +139,14 @@ class BFSCrawler:
     def _fetch_page(self, url: str) -> tuple[str, str] | None:
         """
         Tải trang và trả về (html, url thật của trang) hoặc None.
-        Chuyển hướng được theo thủ công từng bước và bị dừng nếu rời khỏi phạm vi mục tiêu,
-        tránh crawl sang domain ngoài scope.
+        Chuyển hướng được theo thủ công từng bước và bị dừng nếu rời khỏi phạm vi mục tiêu
+        hoặc ngoài chính sách loopback, tránh crawl sang domain ngoài scope.
         """
         current = url
         response: requests.Response | None = None
         for _ in range(MAX_REDIRECTS + 1):
             try:
+                validate_target_url(current)
                 response = self.session.get(current, timeout=self.timeout, allow_redirects=False)
             except (requests.RequestException, ValueError):
                 return None
@@ -153,7 +155,9 @@ class BFSCrawler:
             if not location:
                 break
             try:
-                target = self.url_parser.normalize(urljoin(current, location.strip()))
+                candidate = urljoin(current, location.strip())
+                validate_target_url(candidate)
+                target = self.url_parser.normalize(candidate)
                 in_scope = self.url_parser.is_in_scope(target)
             except ValueError:
                 return None
