@@ -339,11 +339,14 @@ def test_report_endpoint_txt_and_pdf_success_with_unicode_and_xml_special_chars(
     txt_body = txt_resp.get_data(as_text=True)
     assert "OWASP AUTOMATED PENTEST REPORT" in txt_body
     assert f"Session ID    : #{scan_id}" in txt_body
+    assert "http://127.0.0.1:8080" in txt_body
+    assert "max_depth=2" in txt_body
+    assert "CWE-89" in txt_body
     assert "Findings      : 2  (CRITICAL=0, HIGH=1, MEDIUM=0, LOW=1, INFO=0)" in txt_body
     assert "Prepared Statements" in txt_body
     assert "Đắk Lắk" in txt_body
 
-    # Xuất PDF thành công:
+    # Xuất PDF thành công (hoặc skip rõ lý do nếu thiếu reportlab):
     pytest.importorskip("reportlab", reason="Thư viện reportlab chưa được cài đặt để kiểm thử xuất PDF.")
     pdf_resp = client.get(f"/api/scans/{scan_id}/report?format=pdf", headers=owner_headers)
     assert pdf_resp.status_code == 200
@@ -397,7 +400,7 @@ def test_pdf_unicode_font_fallback_and_custom_font_validation(monkeypatch):
 
 
 # ==============================================================================
-# MODULE 7.1 & 7.2 — BENCHMARK CWE NORMALIZATION, FIXTURES & CLI (ISSUES 1 & 2)
+# MODULE 7.1 & 7.2 — BENCHMARK EVALUATION, CWE NORMALIZATION, FIXTURES & CLI
 # ==============================================================================
 
 
@@ -452,6 +455,8 @@ def test_benchmark_matching_deduplication_and_metrics_calculation():
         {"vuln_category": "headers", "target_url": "http://127.0.0.1:3000/", "parameter": ""},
     ]
 
+    # Scanner trả về: 3 TP (trong đó 1 bản ghi SQLi bị lặp 2 lần và 2 bản ghi headers cùng trang),
+    # 1 FP (xss ở /contact), và bỏ sót 1 FN (csrf ở /profile).
     findings = [
         {
             "vuln_name": "SQL Injection (Error-based)",
@@ -501,18 +506,21 @@ def test_benchmark_matching_deduplication_and_metrics_calculation():
     assert counts["duplicates_removed"] == 2
     assert counts["unique_findings_total"] == 4
 
+    # Precision = 3 / (3 + 1) = 0.75; Recall = 3 / (3 + 1) = 0.75; F1 = 0.75
     assert metrics["precision"] == pytest.approx(0.75)
     assert metrics["recall"] == pytest.approx(0.75)
     assert metrics["f1_score"] == pytest.approx(0.75)
 
 
 def test_benchmark_zero_denominators_and_invalid_entries():
+    # 1. Cả ground truth và findings đều rỗng -> mẫu số = 0, trả 0.0 an toàn:
     empty_res = compute_classification_metrics([], [])
     assert empty_res["counts"]["tp"] == 0
     assert empty_res["counts"]["fp"] == 0
     assert empty_res["counts"]["fn"] == 0
     assert empty_res["metrics"] == {"precision": 0.0, "recall": 0.0, "f1_score": 0.0}
 
+    # 2. Có Ground Truth nhưng không phát hiện được gì (TP = 0, FP = 0, FN = 1):
     no_findings_res = compute_classification_metrics(
         [{"vuln_category": "sqli", "target_url": "http://127.0.0.1:4280/vuln", "parameter": "id"}],
         [],
@@ -520,12 +528,106 @@ def test_benchmark_zero_denominators_and_invalid_entries():
     assert no_findings_res["counts"]["fn"] == 1
     assert no_findings_res["metrics"] == {"precision": 0.0, "recall": 0.0, "f1_score": 0.0}
 
+    # 3. Các bản ghi thiếu URL hoặc thiếu loại lỗ hổng bị bỏ qua và đếm vào invalid_*_skipped:
     malformed_res = compute_classification_metrics(
         [{"vuln_category": "", "target_url": ""}, {"not": "valid"}],
         [{"vuln_name": "SQLi", "target_url": ""}, "not-a-dict"],  # type: ignore[list-item]
     )
     assert malformed_res["counts"]["invalid_ground_truth_skipped"] == 2
     assert malformed_res["counts"]["invalid_findings_skipped"] == 2
+
+
+def test_benchmark_timing_zap_parser_and_cli_unmeasured_reporting(tmp_path: Path):
+    # Kiểm tra tính thời gian trung bình và bỏ qua các lần chạy lỗi thời gian:
+    timing = compute_timing_metrics(
+        [
+            {"duration_seconds": 10.0},
+            {"start_time": "2026-11-12T10:00:00+00:00", "end_time": "2026-11-12T10:00:20+00:00"},
+            {"start_time": "2026-11-12T10:00:20+00:00", "end_time": "2026-11-12T10:00:10+00:00"},  # âm -> bỏ qua
+            {"duration_seconds": -5},  # âm -> bỏ qua
+            {},  # thiếu thời gian -> bỏ qua
+        ]
+    )
+    assert timing["measured"] is True
+    assert timing["valid_runs_count"] == 2
+    assert timing["skipped_runs_count"] == 3
+    assert timing["average_duration_seconds"] == pytest.approx(15.0)
+    assert timing["min_duration_seconds"] == pytest.approx(10.0)
+    assert timing["max_duration_seconds"] == pytest.approx(20.0)
+
+    unmeasured_timing = compute_timing_metrics([])
+    assert unmeasured_timing["measured"] is False
+    assert unmeasured_timing["status"] == "chưa đo"
+
+    # Kiểm tra đọc định dạng JSON chuẩn của OWASP ZAP:
+    zap_raw = {
+        "site": [
+            {
+                "@name": "http://127.0.0.1:3000",
+                "alerts": [
+                    {
+                        "alert": "SQL Injection",
+                        "cweid": "89",
+                        "instances": [
+                            {"uri": "http://127.0.0.1:3000/rest/products/search?q=1", "param": "q"}
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    parsed_zap = parse_tool_artifact(zap_raw)
+    assert len(parsed_zap["findings"]) == 1
+    assert extract_matching_key(parsed_zap["findings"][0]) == ("sqli", "/rest/products/search", "q")
+
+    # Kiểm tra CLI xuất báo cáo Markdown ghi rõ "chưa đo" cho công cụ chưa có artifact:
+    gt_file = tmp_path / "gt.json"
+    scanner_file = tmp_path / "scanner.json"
+    out_md = tmp_path / "report.md"
+
+    gt_file.write_text(
+        json.dumps(
+            {
+                "ground_truth": [
+                    {"vuln_category": "sqli", "target_url": "http://127.0.0.1:3000/rest/products/search", "parameter": "q"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    scanner_file.write_text(
+        json.dumps(
+            {
+                "duration_seconds": 8.4,
+                "findings": [
+                    {
+                        "vuln_name": "SQL Injection (Error-based)",
+                        "cwe_id": "CWE-89",
+                        "target_url": "http://127.0.0.1:3000/rest/products/search",
+                        "parameter": "q",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = benchmark_cli_main(
+        [
+            "--ground-truth",
+            str(gt_file),
+            "--scanner-report",
+            str(scanner_file),
+            "--target-name",
+            "Juice Shop Localhost",
+            "-o",
+            str(out_md),
+        ]
+    )
+    assert exit_code == 0
+    md_text = out_md.read_text(encoding="utf-8")
+    assert "OWASP Web Scanner (Đề tài) | đã đo | 1 | 0 | 0 | 1.0000 | 1.0000 | 1.0000 | 8.4s" in md_text
+    assert "OWASP ZAP Baseline | **chưa đo**" in md_text
 
 
 def test_benchmark_cli_with_sample_fixtures_and_partial_inputs(tmp_path: Path):

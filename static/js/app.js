@@ -1,5 +1,3 @@
-<<<<<<< Updated upstream
-=======
 /**
  * Frontend logic cho OWASP Web Scanner Dashboard & Scan Detail - Issue #6.1/#6.2.
  *
@@ -1084,4 +1082,3 @@
     getCurrentDetailFindings: getCurrentDetailFindings,
   };
 })(window);
->>>>>>> Stashed changes

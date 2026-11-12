@@ -1,26 +1,12 @@
-# DACN
+# DACN — OWASP Web Vulnerability Scanner
 
-<<<<<<< Updated upstream
-## Web Backend API (Module 5)
-
-Install dependencies with `pip install -r requirements.txt`, then start the
-development API with `python app.py`. The API listens on `http://127.0.0.1:5000`.
-Register via `POST /api/auth/register`, log in via `POST /api/auth/login`, and
-send the returned JWT as `Authorization: Bearer <token>` to `/api/scans`.
-=======
 Hệ thống rà quét lỗ hổng bảo mật ứng dụng Web tự động theo chuẩn **OWASP Top 10** (`SQL Injection`, `Cross-Site Scripting - XSS`, `Cross-Site Request Forgery - CSRF`, `Security Misconfiguration / Missing Security Headers`), hỗ trợ giao diện dòng lệnh (CLI), RESTful API, Web Dashboard trực quan, xuất báo cáo kỹ thuật (`TXT`/`PDF`) và bộ công cụ đánh giá thực nghiệm (Benchmark) trong môi trường Docker cô lập.
 
 > **Cảnh báo an toàn & Đạo đức (Authorized Local Lab Only):**
 > Công cụ này chỉ phục vụ mục đích học tập, nghiên cứu và kiểm thử trên môi trường Lab cục bộ được cấp phép (`localhost`, `*.localhost`, hoặc địa chỉ IP loopback `127.0.0.0/8` / `::1`). Mọi mục tiêu bên ngoài loopback, địa chỉ IP LAN/private, link-local/cloud metadata (`169.254.169.254`), hostname phân giải ra IP ngoài loopback hoặc HTTP redirect sang host ngoài loopback đều bị chặn cứng ở cả API, CLI, Engine, Crawler và `SafeHTTPClient`.
->>>>>>> Stashed changes
 
-Scan jobs run on a background thread. For lab safety, the scan API only accepts
-HTTP(S) targets on `localhost`, `*.localhost`, or a loopback IP address. Run
-tests with `pytest tests/test_module5.py`.
+---
 
-<<<<<<< Updated upstream
-## Cấu hình triển khai & Giới hạn kiến trúc (Module 5)
-=======
 ## 1. Cài đặt & Cấu hình an toàn
 
 ### 1.1. Yêu cầu hệ thống
@@ -195,7 +181,6 @@ pytest -v
 ---
 
 ## 7. Cấu hình triển khai & Giới hạn kiến trúc
->>>>>>> Stashed changes
 
 ### 1. Chính sách mục tiêu Loopback-Only thống nhất (`core/security/`)
 - Mọi URL đầu vào qua API (`schemas/requested_scope_schema.py`), CLI (`scanner.py`), Engine (`core/engine/scan_engine.py`), Crawler (`core/crawler/bfs_crawler.py`), Scanner (`core/scanners/base_scanner.py`) và HTTP Client (`core/utils/safe_http_client.py`) đều được kiểm tra qua `validate_target_url`:
