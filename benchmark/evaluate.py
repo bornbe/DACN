@@ -5,24 +5,37 @@ Thời gian quét trung bình) và đối chứng với OWASP ZAP từ tệp art
 Nguyên tắc:
 - Không tự động gửi request mạng hay khởi chạy container.
 - Không bịa đặt số liệu thực nghiệm; chỉ tính toán từ tệp dữ liệu đầu vào có thể kiểm chứng.
-- Nếu thiếu dữ liệu chạy thực tế (ví dụ chưa có artifact của ZAP), báo rõ trạng thái "chưa đo".
+- Nếu thiếu dữ liệu chạy thực tế (ví dụ chưa có artifact của ZAP hoặc Scanner), báo rõ trạng thái "chưa đo".
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-# Bảng ánh xạ từ khóa tên lỗ hổng / mã CWE về nhóm chuẩn hóa để so khớp giữa Scanner và OWASP ZAP
+# Ánh xạ mã CWE chuẩn (khớp chính xác mã số sau khi chuẩn hóa, tuyệt đối không khớp chuỗi con)
+_SUPPORTED_CWE_MAP: dict[str, str] = {
+    "CWE-89": "sqli",
+    "CWE-79": "xss",
+    "CWE-352": "csrf",
+    "CWE-693": "headers",
+    "CWE-1021": "headers",
+    "CWE-16": "headers",
+    "CWE-319": "headers",
+    "CWE-525": "headers",
+}
+
+# Bảng ánh xạ cụm từ tên lỗ hổng về nhóm chuẩn hóa (không chứa số CWE trần để tránh khớp nhầm CWE-189 -> 89)
 _CATEGORY_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("sqli", ("sql injection", "sqli", "cwe-89", "89")),
-    ("xss", ("cross-site scripting", "xss", "input reflection", "cwe-79", "79")),
-    ("csrf", ("anti-csrf", "csrf", "cross-site request forgery", "cwe-352", "352")),
+    ("sqli", ("sql injection", "sqli")),
+    ("xss", ("cross-site scripting", "xss", "input reflection")),
+    ("csrf", ("anti-csrf", "csrf", "cross-site request forgery")),
     (
         "headers",
         (
@@ -34,14 +47,12 @@ _CATEGORY_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
             "clickjacking",
             "hsts",
             "csp",
-            "cwe-693",
-            "cwe-1021",
-            "cwe-16",
-            "693",
-            "1021",
         ),
     ),
 )
+
+_CWE_TOKEN_RE = re.compile(r"\bcwe[-_:\s]*0*(\d+)\b", re.IGNORECASE)
+_DIGITS_ONLY_RE = re.compile(r"^0*(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -61,15 +72,87 @@ class MatchingConfig:
     )
 
 
-def normalize_vuln_category(raw_type: Any, cwe_id: Any = None) -> str:
-    """Chuẩn hóa tên lỗ hổng hoặc CWE ID về nhóm chuẩn (`sqli`, `xss`, `csrf`, `headers`...)."""
-    text = f"{raw_type or ''} {cwe_id or ''}".strip().lower()
+def normalize_cwe_id(raw_cwe: Any) -> str | None:
+    """
+    Chuẩn hóa định dạng CWE ID bất kỳ (`89`, `"89"`, `"089"`, `"CWE-89"`, `"cwe_089"`)
+    về dạng chuẩn `"CWE-<số nguyên dương>"`.
+    Trả về `None` nếu rỗng, âm (ví dụ `"-1"` từ ZAP), bằng `0` hoặc không hợp lệ.
+    """
+    if raw_cwe is None or isinstance(raw_cwe, bool):
+        return None
+    if isinstance(raw_cwe, int):
+        return f"CWE-{raw_cwe}" if raw_cwe > 0 else None
+
+    text = str(raw_cwe).strip()
     if not text:
-        return ""
-    for canonical, keywords in _CATEGORY_ALIASES:
-        if any(kw in text for kw in keywords):
-            return canonical
-    return " ".join(str(raw_type or "").strip().lower().split())
+        return None
+
+    digit_match = _DIGITS_ONLY_RE.match(text)
+    if digit_match:
+        num = int(digit_match.group(1))
+        return f"CWE-{num}" if num > 0 else None
+
+    token_match = _CWE_TOKEN_RE.search(text)
+    if token_match:
+        num = int(token_match.group(1))
+        return f"CWE-{num}" if num > 0 else None
+
+    return None
+
+
+def extract_cwe_codes(raw_type: Any = None, cwe_id: Any = None) -> list[str]:
+    """Trích xuất danh sách mã CWE chuẩn hóa (`CWE-<số>`) từ trường `cwe_id` và `raw_type`."""
+    codes: list[str] = []
+    direct = normalize_cwe_id(cwe_id)
+    if direct:
+        codes.append(direct)
+
+    for source in (raw_type, cwe_id):
+        if not isinstance(source, str):
+            continue
+        for match in _CWE_TOKEN_RE.finditer(source):
+            num = int(match.group(1))
+            if num > 0:
+                code = f"CWE-{num}"
+                if code not in codes:
+                    codes.append(code)
+    return codes
+
+
+def _matches_alias(text: str, alias: str) -> bool:
+    """Kiểm tra cụm alias xuất hiện theo ranh giới từ trong chuỗi văn bản đã chuẩn hóa."""
+    pattern = r"(?<![a-z0-9])" + re.escape(alias.lower()) + r"(?![a-z0-9])"
+    return bool(re.search(pattern, text))
+
+
+def normalize_vuln_category(raw_type: Any, cwe_id: Any = None) -> str:
+    """
+    Chuẩn hóa tên lỗ hổng hoặc mã CWE về nhóm chuẩn (`sqli`, `xss`, `csrf`, `headers`...):
+    1. Chuẩn hóa CWE về dạng `CWE-<số>` và so khớp chính xác với `_SUPPORTED_CWE_MAP`
+       (tránh lỗi nhận nhầm `CWE-189` thành `CWE-89`).
+    2. So khớp tên loại lỗ hổng theo cụm từ/ranh giới từ với `_CATEGORY_ALIASES`.
+    3. Với loại lỗ hổng hoặc mã CWE chưa hỗ trợ, giữ nguyên định danh đã chuẩn hóa (ví dụ `cwe-189`
+       hoặc tên lỗ hổng viết thường) chứ không gán ép sang nhóm sai.
+    """
+    cwe_codes = extract_cwe_codes(raw_type, cwe_id)
+    for code in cwe_codes:
+        if code in _SUPPORTED_CWE_MAP:
+            return _SUPPORTED_CWE_MAP[code]
+
+    raw_text = str(raw_type or "").strip().lower()
+    # Loại bỏ các token CWE khỏi chuỗi tên trước khi khớp alias chữ
+    text_without_cwe = " ".join(_CWE_TOKEN_RE.sub(" ", raw_text).split())
+
+    if text_without_cwe:
+        for canonical, aliases in _CATEGORY_ALIASES:
+            if any(_matches_alias(text_without_cwe, alias) for alias in aliases):
+                return canonical
+        return text_without_cwe
+
+    if cwe_codes:
+        return cwe_codes[0].lower()
+
+    return ""
 
 
 def normalize_endpoint_path(raw_url: Any, normalize_host: bool = True) -> str:
@@ -120,7 +203,7 @@ def extract_matching_key(
         or item.get("alert")
         or item.get("name")
     )
-    raw_cwe = item.get("cwe_id") or item.get("cweid")
+    raw_cwe = item.get("cwe_id") if item.get("cwe_id") is not None else item.get("cweid")
     category = normalize_vuln_category(raw_vuln, raw_cwe)
 
     raw_url = (
@@ -160,7 +243,16 @@ def parse_tool_artifact(data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(data.get("findings"), list):
         for item in data["findings"]:
             if isinstance(item, dict):
-                findings.append(item)
+                normalized_item = dict(item)
+                raw_cwe = (
+                    normalized_item.get("cwe_id")
+                    if normalized_item.get("cwe_id") is not None
+                    else normalized_item.get("cweid")
+                )
+                normalized_cwe = normalize_cwe_id(raw_cwe)
+                if normalized_cwe is not None:
+                    normalized_item["cwe_id"] = normalized_cwe
+                findings.append(normalized_item)
     elif isinstance(data.get("site"), list):
         # Định dạng xuất JSON chuẩn của OWASP ZAP
         for site in data["site"]:
@@ -170,7 +262,8 @@ def parse_tool_artifact(data: dict[str, Any]) -> dict[str, Any]:
                 if not isinstance(alert, dict):
                     continue
                 alert_name = alert.get("alert") or alert.get("name") or ""
-                cwe_id = f"CWE-{alert['cweid']}" if alert.get("cweid") else None
+                raw_cwe = alert.get("cweid") if alert.get("cweid") is not None else alert.get("cwe_id")
+                cwe_id = normalize_cwe_id(raw_cwe)
                 instances = alert.get("instances") or [{}]
                 for inst in instances:
                     if not isinstance(inst, dict):
@@ -438,10 +531,10 @@ def _load_json_list_or_object(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI tổng hợp chỉ số thực nghiệm từ file Ground Truth và các file artifact JSON."""
+def build_parser() -> argparse.ArgumentParser:
+    """Khởi tạo parser CLI chuẩn cho `python -m benchmark.evaluate`."""
     parser = argparse.ArgumentParser(
-        prog="benchmark-evaluate",
+        prog="python -m benchmark.evaluate",
         description="Tính chỉ số TP, FP, FN, Precision, Recall, F1-Score và thời gian quét từ artifacts.",
     )
     parser.add_argument(
@@ -476,7 +569,12 @@ def main(argv: list[str] | None = None) -> int:
         "--output",
         help="Đường dẫn xuất kết quả tổng hợp (.json hoặc .md).",
     )
+    return parser
 
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI tổng hợp chỉ số thực nghiệm từ file Ground Truth và các file artifact JSON."""
+    parser = build_parser()
     args = parser.parse_args(argv)
     gt_raw = _load_json_list_or_object(Path(args.ground_truth))
     gt_list = gt_raw.get("ground_truth", []) if isinstance(gt_raw, dict) else gt_raw

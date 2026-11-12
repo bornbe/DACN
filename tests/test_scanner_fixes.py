@@ -15,6 +15,7 @@ from unittest import mock
 
 from core.crawler.form_parser import EndpointDescriptor
 from core.engine import ScanContext, ScanEngine
+from core.scanners import SCANNER_REGISTRY
 from core.scanners.csrf_scanner import CSRFScanner, is_weak_token
 from core.scanners.security_headers_scanner import SecurityHeadersScanner
 from scanner import main as cli_main
@@ -209,6 +210,20 @@ class TestHeadersSessionState(ServerCase):
 
 
 class TestEngineNoModules(ServerCase):
+    """Kiểm tra hành vi Engine và CLI khi các module được yêu cầu chưa khả dụng / bị vô hiệu hóa."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._reg_patch = mock.patch.dict(
+            SCANNER_REGISTRY,
+            {
+                "sqli": ("core.scanners.ssrf_scanner", "SSRFScanner"),
+                "xss": ("core.scanners.ssrf_scanner", "SSRFScanner"),
+            },
+        )
+        self._reg_patch.start()
+        self.addCleanup(self._reg_patch.stop)
+
     def test_all_modules_unavailable_returns_empty_structured_result(self) -> None:
         events: list[dict] = []
         ctx = ScanContext(target_url=self.base, modules=["sqli", "xss"], on_event=events.append)

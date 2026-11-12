@@ -7,15 +7,21 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
 from xml.sax.saxutils import escape
 
+from config.config import BASE_DIR, Config
+
 if TYPE_CHECKING:
     from models.scan_job import CrawledEndpoint, ScanSession
     from models.vulnerability import VulnerabilityFinding
+
+logger = logging.getLogger(__name__)
 
 SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
 SUPPORTED_FORMATS = ("txt", "json", "pdf")
@@ -23,12 +29,29 @@ API_REPORT_FORMATS = ("txt", "pdf")
 
 # Loại bỏ các ký tự điều khiển XML không hợp lệ trước khi đưa vào ReportLab Paragraph
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_VIETNAMESE_MAP = str.maketrans({"đ": "d", "Đ": "D"})
 
 
-def _sanitize_xml_text(value: Any) -> str:
+def _transliterate_ascii(text: str) -> str:
+    """
+    Chuyển chuỗi tiếng Việt có dấu sang ASCII không dấu khi hệ thống không có font TrueType Unicode
+    (tránh lỗi hiển thị ô vuông đen trên font Type1 Helvetica mặc định của ReportLab).
+    """
+    mapped = text.translate(_VIETNAMESE_MAP)
+    decomposed = unicodedata.normalize("NFKD", mapped)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch)).encode("ascii", "replace").decode("ascii")
+
+
+def _sanitize_xml_text(value: Any, *, ascii_fallback: bool = False) -> str:
+    """
+    Làm sạch ký tự điều khiển XML và escape các thực thể HTML/XML (`&`, `<`, `>`, `'`, `"`).
+    Nếu `ascii_fallback=True`, chuyển ký tự tiếng Việt sang ASCII trước khi escape.
+    """
     text = "" if value is None else str(value)
     cleaned = _CONTROL_CHARS_RE.sub("", text)
-    return escape(cleaned)
+    if ascii_fallback:
+        cleaned = _transliterate_ascii(cleaned)
+    return escape(cleaned, {'"': "&quot;", "'": "&#39;"})
 
 
 def _cell(value: Any, limit: int = 80) -> str:
@@ -37,6 +60,41 @@ def _cell(value: Any, limit: int = 80) -> str:
     text = _CONTROL_CHARS_RE.sub("", text)
     text = text.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _compute_normalized_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """
+    Đảm bảo thống kê mức độ nghiêm trọng (`severity_counts`) và `total_findings` luôn được
+    tính nhất quán từ danh sách `findings` thực tế cho cả TXT và PDF, tránh lệch với summary cũ.
+    """
+    raw_summary = dict(report.get("summary") or {}) if isinstance(report.get("summary"), dict) else {}
+    findings = report.get("findings")
+    if isinstance(findings, list):
+        counts = {sev: 0 for sev in SEVERITY_ORDER}
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            sev = str(item.get("severity") or "INFO").upper()
+            if sev not in counts:
+                sev = "INFO"
+            counts[sev] += 1
+        total_findings = len(findings)
+    else:
+        stored_counts = raw_summary.get("severity_counts") or {}
+        counts = {sev: int(stored_counts.get(sev, 0) or 0) for sev in SEVERITY_ORDER}
+        total_findings = int(raw_summary.get("total_findings", sum(counts.values())) or 0)
+
+    endpoints = report.get("endpoints")
+    endpoint_count = len(endpoints) if isinstance(endpoints, list) else 0
+    total_endpoints = max(int(raw_summary.get("total_endpoints", 0) or 0), endpoint_count)
+    pages_crawled = int(raw_summary.get("pages_crawled", total_endpoints) or 0)
+
+    return {
+        "pages_crawled": pages_crawled,
+        "total_endpoints": total_endpoints,
+        "total_findings": total_findings,
+        "severity_counts": counts,
+    }
 
 
 def build_session_report(
@@ -130,8 +188,8 @@ def render_markdown_table(findings: list[dict[str, Any]]) -> str:
 
 
 def _summary_lines(report: dict[str, Any]) -> list[str]:
-    summary = report.get("summary", {})
-    counts = summary.get("severity_counts", {})
+    summary = _compute_normalized_summary(report)
+    counts = summary["severity_counts"]
     lines: list[str] = []
     if report.get("session_id") is not None:
         lines.append(f"Session ID    : #{report.get('session_id')}")
@@ -179,25 +237,79 @@ def render_text(report: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
-def _register_unicode_font() -> str:
-    """Đăng ký font Unicode (hỗ trợ tiếng Việt) cho PDF; fallback Helvetica."""
+def _get_unicode_font_candidates() -> list[Path]:
+    """Danh sách đường dẫn font TrueType Unicode hỗ trợ tiếng Việt trên các hệ điều hành."""
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    localappdata = os.environ.get("LOCALAPPDATA", "")
+    bundled_dir = BASE_DIR / "static" / "fonts"
+
+    candidates: list[Path] = [
+        bundled_dir / "DejaVuSans.ttf",
+        bundled_dir / "NotoSans-Regular.ttf",
+        bundled_dir / "LiberationSans-Regular.ttf",
+        Path(windir) / "Fonts" / "arial.ttf",
+        Path(windir) / "Fonts" / "segoeui.ttf",
+        Path(windir) / "Fonts" / "tahoma.ttf",
+        Path(windir) / "Fonts" / "calibri.ttf",
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/TTF/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+        Path("/usr/share/fonts/noto/NotoSans-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Tahoma.ttf"),
+        Path("/Library/Fonts/Arial.ttf"),
+    ]
+    if localappdata:
+        candidates.append(Path(localappdata) / "Microsoft" / "Windows" / "Fonts" / "DejaVuSans.ttf")
+    return candidates
+
+
+def _register_unicode_font() -> tuple[str, bool]:
+    """
+    Đăng ký font TrueType Unicode (hỗ trợ đầy đủ tiếng Việt) cho ReportLab.
+    Trả về `(font_name, is_unicode_ttf)`:
+    - Nếu người dùng đặt `REPORT_UNICODE_FONT_PATH`, bắt buộc nạp từ đường dẫn đó (ném `RuntimeError` nếu lỗi).
+    - Nếu tìm thấy font TrueType hệ thống/bundled, đăng ký `ReportFont` và trả về `("ReportFont", True)`.
+    - Nếu không tìm thấy bất kỳ font TrueType nào, trả về `("Helvetica", False)` để báo cáo chuyển sang
+      chế độ chuẩn hóa ASCII an toàn (không tuyên bố hỗ trợ Unicode khi dùng Helvetica).
+    """
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    windir = os.environ.get("WINDIR", r"C:\Windows")
-    candidates = [
-        Path(windir) / "Fonts" / "arial.ttf",
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
-    ]
-    for path in candidates:
+    configured_path = (
+        os.environ.get("REPORT_UNICODE_FONT_PATH", "").strip()
+        or getattr(Config, "REPORT_UNICODE_FONT_PATH", "").strip()
+    )
+    if configured_path:
+        custom = Path(configured_path)
+        if not custom.is_file():
+            raise RuntimeError(
+                f"Không tìm thấy tệp font Unicode được cấu hình tại REPORT_UNICODE_FONT_PATH={configured_path!r}."
+            )
+        try:
+            pdfmetrics.registerFont(TTFont("ReportFont", str(custom)))
+            return "ReportFont", True
+        except Exception as exc:
+            raise RuntimeError(
+                f"Không thể nạp tệp font Unicode tại REPORT_UNICODE_FONT_PATH={configured_path!r}: {exc}"
+            ) from exc
+
+    for path in _get_unicode_font_candidates():
         if path.exists():
             try:
                 pdfmetrics.registerFont(TTFont("ReportFont", str(path)))
-                return "ReportFont"
+                return "ReportFont", True
             except Exception:  # noqa: BLE001
                 continue
-    return "Helvetica"
+
+    logger.warning(
+        "Không tìm thấy font TrueType Unicode trên hệ thống; PDF chuyển sang chế độ Helvetica ASCII fallback. "
+        "Đặt biến môi trường REPORT_UNICODE_FONT_PATH trỏ tới tệp .ttf để hiển thị tiếng Việt có dấu."
+    )
+    return "Helvetica", False
 
 
 def write_pdf(report: dict[str, Any], destination: Path | str | IO[bytes]) -> None:
@@ -216,7 +328,9 @@ def write_pdf(report: dict[str, Any], destination: Path | str | IO[bytes]) -> No
     except ImportError as exc:
         raise RuntimeError("Xuất PDF cần thư viện 'reportlab' (pip install reportlab).") from exc
 
-    font = _register_unicode_font()
+    font, is_unicode_ttf = _register_unicode_font()
+    ascii_fallback = not is_unicode_ttf
+
     styles = getSampleStyleSheet()
     body = ParagraphStyle("body", parent=styles["Normal"], fontName=font, fontSize=9, leading=12)
     title = ParagraphStyle("title", parent=styles["Title"], fontName=font, fontSize=18, leading=22)
@@ -230,8 +344,11 @@ def write_pdf(report: dict[str, Any], destination: Path | str | IO[bytes]) -> No
     )
     heading = ParagraphStyle("heading", parent=styles["Heading2"], fontName=font, fontSize=13, leading=16)
 
+    def clean_xml(text: Any) -> str:
+        return _sanitize_xml_text(text, ascii_fallback=ascii_fallback)
+
     def para(text: Any) -> Paragraph:
-        return Paragraph(_sanitize_xml_text(text), body)
+        return Paragraph(clean_xml(text), body)
 
     sev_colors = {
         "CRITICAL": "#8e0000",
@@ -242,24 +359,33 @@ def write_pdf(report: dict[str, Any], destination: Path | str | IO[bytes]) -> No
     }
 
     story: list[Any] = [
-        Paragraph("OWASP Automated Pentest Report", title),
-        Paragraph("Báo cáo Kiểm thử Thâm nhập Web Tự động theo chuẩn OWASP", subtitle),
+        Paragraph(clean_xml("OWASP Automated Pentest Report"), title),
+        Paragraph(clean_xml("Báo cáo Kiểm thử Thâm nhập Web Tự động theo chuẩn OWASP"), subtitle),
         Spacer(1, 0.4 * cm),
     ]
 
+    if ascii_fallback:
+        story.append(
+            para(
+                "[Note: No Unicode TrueType font found; text transliterated to ASCII. "
+                "Set REPORT_UNICODE_FONT_PATH to a .ttf font file for full Vietnamese diacritics.]"
+            )
+        )
+        story.append(Spacer(1, 0.2 * cm))
+
     # 1. Thông tin phiên kiểm thử
-    story.append(Paragraph("1. Thông tin phiên kiểm thử (Scan Session & Scope)", heading))
+    story.append(Paragraph(clean_xml("1. Thông tin phiên kiểm thử (Scan Session & Scope)"), heading))
     for line in _summary_lines(report):
         story.append(para(line))
     story.append(Spacer(1, 0.4 * cm))
 
-    # 2. Executive Summary & biểu đồ phân bố mức độ nghiêm trọng
-    summary = report.get("summary", {})
-    counts = summary.get("severity_counts", {})
+    # 2. Executive Summary & biểu đồ phân bố mức độ nghiêm trọng (luôn tính từ findings thực tế)
+    summary = _compute_normalized_summary(report)
+    counts = summary["severity_counts"]
     findings = report.get("findings", [])
-    total_findings = max(int(summary.get("total_findings", len(findings)) or 0), len(findings))
+    total_findings = summary["total_findings"]
 
-    story.append(Paragraph("2. Tóm lược điều hành (Executive Summary)", heading))
+    story.append(Paragraph(clean_xml("2. Tóm lược điều hành (Executive Summary)"), heading))
     story.append(
         para(
             f"Tổng số điểm cuối (endpoints) đã rà quét: {summary.get('total_endpoints', 0)} | "
@@ -290,7 +416,7 @@ def write_pdf(report: dict[str, Any], destination: Path | str | IO[bytes]) -> No
     story.append(Spacer(1, 0.4 * cm))
 
     # 3. Chi tiết kỹ thuật từng phát hiện
-    story.append(Paragraph("3. Chi tiết kỹ thuật các phát hiện (Technical Findings)", heading))
+    story.append(Paragraph(clean_xml("3. Chi tiết kỹ thuật các phát hiện (Technical Findings)"), heading))
     if not findings:
         story.append(para("Không phát hiện lỗ hổng nào trong phạm vi kiểm thử."))
     for idx, f in enumerate(findings, 1):
@@ -322,7 +448,7 @@ def write_pdf(report: dict[str, Any], destination: Path | str | IO[bytes]) -> No
         )
         story += [
             Paragraph(
-                f"{idx}. {_sanitize_xml_text(vuln_name)}",
+                f"{idx}. {clean_xml(vuln_name)}",
                 ParagraphStyle("h3", parent=heading, fontSize=11),
             ),
             table,
@@ -330,7 +456,12 @@ def write_pdf(report: dict[str, Any], destination: Path | str | IO[bytes]) -> No
         ]
 
     target_dest: str | IO[bytes] = str(destination) if isinstance(destination, (Path, str)) else destination
-    SimpleDocTemplate(target_dest, pagesize=A4, title="OWASP Pentest Report").build(story)
+    SimpleDocTemplate(
+        target_dest,
+        pagesize=A4,
+        title="OWASP Pentest Report",
+        pageCompression=0,
+    ).build(story)
 
 
 def render_pdf_bytes(report: dict[str, Any]) -> bytes:

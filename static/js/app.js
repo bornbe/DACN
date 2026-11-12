@@ -20,6 +20,7 @@
 
   let dashboardPollTimer = null;
   let detailPollTimer = null;
+  let currentDetailFindings = [];
 
   function escapeHtml(value) {
     const str = value === null || value === undefined ? "" : String(value);
@@ -620,7 +621,7 @@
   }
 
   /* ======================================================================
-   * SCAN DETAIL VIEW & POLLING
+   * SCAN DETAIL VIEW, CLIENT-SIDE FILTERING & POLLING
    * ====================================================================== */
   function openFindingModal(finding) {
     const modal = document.getElementById("findingDetailModal");
@@ -660,45 +661,70 @@
     }
   }
 
-  function renderDetailFindings(findings) {
-    const list = Array.isArray(findings) ? findings : [];
+  function filterFindings(findings, severityFilter, keywordFilter) {
+    const list = Array.isArray(findings) ? findings.slice() : [];
+    const targetSev = String(severityFilter || "ALL").trim().toUpperCase();
+    const keyword = String(keywordFilter || "").trim().toLowerCase();
+
+    return list.filter(function (item) {
+      if (!item || typeof item !== "object") {
+        return false;
+      }
+      const itemSev = String(item.severity || "INFO").toUpperCase();
+      if (targetSev && targetSev !== "ALL" && itemSev !== targetSev) {
+        return false;
+      }
+      if (!keyword) {
+        return true;
+      }
+      const haystack = [
+        item.vuln_type,
+        item.vuln_name,
+        item.target_url,
+        item.param,
+        item.parameter,
+        item.cwe_id,
+        item.owasp_category,
+        item.evidence,
+      ]
+        .map(function (v) {
+          return v ? String(v).toLowerCase() : "";
+        })
+        .join(" ");
+      return haystack.indexOf(keyword) !== -1;
+    });
+  }
+
+  function getCurrentDetailFindings() {
+    return currentDetailFindings.slice();
+  }
+
+  function renderFilteredFindingsTable() {
+    const sevSelect = document.getElementById("findingSeverityFilter");
+    const kwInput = document.getElementById("findingKeywordFilter");
+    const sevValue = sevSelect ? sevSelect.value : "ALL";
+    const kwValue = kwInput ? kwInput.value : "";
+
+    const filtered = filterFindings(currentDetailFindings, sevValue, kwValue);
     const countBadge = document.getElementById("findingsCountBadge");
     if (countBadge) {
-      countBadge.textContent = String(list.length);
-    }
-
-    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
-    list.forEach(function (f) {
-      const sev = String(f.severity || "INFO").toUpperCase();
-      if (counts[sev] !== undefined) {
-        counts[sev] += 1;
+      if (
+        (sevValue && sevValue !== "ALL") ||
+        (kwValue && kwValue.trim() !== "")
+      ) {
+        countBadge.textContent = filtered.length + " / " + currentDetailFindings.length;
       } else {
-        counts.INFO += 1;
+        countBadge.textContent = String(currentDetailFindings.length);
       }
-    });
-
-    const setCnt = function (id, val) {
-      const el = document.getElementById(id);
-      if (el) {
-        el.textContent = String(val);
-      }
-    };
-    setCnt("detailCntCritical", counts.CRITICAL);
-    setCnt("detailCntHigh", counts.HIGH);
-    setCnt("detailCntMedium", counts.MEDIUM);
-    setCnt("detailCntLow", counts.LOW);
-    setCnt("detailCntInfo", counts.INFO);
-
-    if (global.ScannerCharts) {
-      global.ScannerCharts.renderSeverityChart("detailSeverityChart", counts);
     }
 
     const tbody = document.getElementById("findingsTableBody");
     if (!tbody) {
-      return;
+      return filtered;
     }
     tbody.textContent = "";
-    if (list.length === 0) {
+
+    if (currentDetailFindings.length === 0) {
       const tr = document.createElement("tr");
       const td = document.createElement("td");
       td.colSpan = 7;
@@ -706,10 +732,21 @@
       td.textContent = "Không có lỗ hổng nào được ghi nhận cho phiên quét này.";
       tr.appendChild(td);
       tbody.appendChild(tr);
-      return;
+      return filtered;
     }
 
-    list.forEach(function (item, idx) {
+    if (filtered.length === 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 7;
+      td.className = "text-center text-muted py-4";
+      td.textContent = "Không tìm thấy lỗ hổng nào khớp với bộ lọc hiện tại.";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return filtered;
+    }
+
+    filtered.forEach(function (item, idx) {
       const tr = document.createElement("tr");
 
       const tdIdx = document.createElement("td");
@@ -754,6 +791,40 @@
 
       tbody.appendChild(tr);
     });
+
+    return filtered;
+  }
+
+  function renderDetailFindings(findings) {
+    currentDetailFindings = Array.isArray(findings) ? findings.slice() : [];
+
+    const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
+    currentDetailFindings.forEach(function (f) {
+      const sev = String(f.severity || "INFO").toUpperCase();
+      if (counts[sev] !== undefined) {
+        counts[sev] += 1;
+      } else {
+        counts.INFO += 1;
+      }
+    });
+
+    const setCnt = function (id, val) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.textContent = String(val);
+      }
+    };
+    setCnt("detailCntCritical", counts.CRITICAL);
+    setCnt("detailCntHigh", counts.HIGH);
+    setCnt("detailCntMedium", counts.MEDIUM);
+    setCnt("detailCntLow", counts.LOW);
+    setCnt("detailCntInfo", counts.INFO);
+
+    if (global.ScannerCharts) {
+      global.ScannerCharts.renderSeverityChart("detailSeverityChart", counts);
+    }
+
+    return renderFilteredFindingsTable();
   }
 
   function renderScanDetailMeta(scan) {
@@ -890,6 +961,31 @@
     const pdfBtn = document.getElementById("downloadPdfBtn");
     const closeModalBtn = document.getElementById("closeFindingModalBtn");
     const modalBackdrop = document.getElementById("findingDetailModal");
+    const severityFilter = document.getElementById("findingSeverityFilter");
+    const keywordFilter = document.getElementById("findingKeywordFilter");
+    const clearFilterBtn = document.getElementById("clearFindingFilterBtn");
+
+    if (severityFilter) {
+      severityFilter.addEventListener("change", function () {
+        renderFilteredFindingsTable();
+      });
+    }
+    if (keywordFilter) {
+      keywordFilter.addEventListener("input", function () {
+        renderFilteredFindingsTable();
+      });
+    }
+    if (clearFilterBtn) {
+      clearFilterBtn.addEventListener("click", function () {
+        if (severityFilter) {
+          severityFilter.value = "ALL";
+        }
+        if (keywordFilter) {
+          keywordFilter.value = "";
+        }
+        renderFilteredFindingsTable();
+      });
+    }
 
     if (stopBtn) {
       stopBtn.addEventListener("click", async function () {
@@ -980,5 +1076,9 @@
     setSession: setSession,
     clearSession: clearSession,
     downloadReportFile: downloadReportFile,
+    filterFindings: filterFindings,
+    renderDetailFindings: renderDetailFindings,
+    renderFilteredFindingsTable: renderFilteredFindingsTable,
+    getCurrentDetailFindings: getCurrentDetailFindings,
   };
 })(window);

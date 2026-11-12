@@ -11,13 +11,16 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest import mock
 
 from core.crawler.form_parser import EndpointDescriptor
 from core.engine import ResultManager, ScanContext, ScanEngine
-from core.scanners import Finding, load_scanner_class
+from core.scanners import SCANNER_REGISTRY, Finding, load_scanner_class
 from core.scanners.base_scanner import BaseScanner
 from core.scanners.csrf_scanner import CSRFScanner
 from core.scanners.security_headers_scanner import SecurityHeadersScanner
+from core.scanners.sqli_scanner import SQLiScanner
+from core.scanners.xss_scanner import XSSScanner
 from models import Base, VulnerabilityFinding, get_session_factory, init_db
 from scanner import main as cli_main
 from services.report_service import export_report
@@ -38,6 +41,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src * 'unsafe-inline'")
         self.end_headers()
         self.wfile.write(PAGE.encode())
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 0:
+            self.rfile.read(length)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<html><body>ok</body></html>")
 
     def log_message(self, *args) -> None:  # im lặng
         pass
@@ -115,8 +127,15 @@ class TestScanners(LocalServerCase):
 
     def test_registry_skips_unimplemented_modules(self) -> None:
         self.assertIs(load_scanner_class("headers"), SecurityHeadersScanner)
+        self.assertIs(load_scanner_class("csrf"), CSRFScanner)
+        self.assertIs(load_scanner_class("sqli"), SQLiScanner)
+        self.assertIs(load_scanner_class("xss"), XSSScanner)
+        # Module bị vô hiệu hóa (ssrf) hoặc module chưa cài đặt sẽ ném LookupError/ImportError
         with self.assertRaises((ImportError, LookupError)):
-            load_scanner_class("sqli")
+            load_scanner_class("ssrf")
+        with mock.patch.dict(SCANNER_REGISTRY, {"unimpl": ("core.scanners.ssrf_scanner", "SSRFScanner")}):
+            with self.assertRaises((ImportError, LookupError)):
+                load_scanner_class("unimpl")
 
 
 class TestEngine(LocalServerCase):
@@ -138,8 +157,8 @@ class TestEngine(LocalServerCase):
         report = ScanEngine(ctx, db_session=db).run()
         try:
             self.assertEqual(report.status, "COMPLETED")
-            self.assertIn("sqli", report.skipped_modules)
-            self.assertEqual(set(report.modules), {"headers", "csrf"})
+            self.assertEqual(report.skipped_modules, {})
+            self.assertEqual(set(report.modules), {"headers", "csrf", "sqli", "xss"})
             self.assertTrue(any(f.vuln_name == "Anti-CSRF Token Missing" for f in report.findings))
             self.assertEqual(report.summary["total_findings"], len(report.findings))
             self.assertEqual([e for e in events if e["type"] == "progress"][-1]["percent"], 100)

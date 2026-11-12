@@ -104,10 +104,36 @@
     </div>
   </div>
 
-  <!-- Bảng danh sách lỗ hổng phát hiện -->
+  <!-- Bảng danh sách lỗ hổng phát hiện kèm bộ lọc client-side -->
   <div class="card shadow-sm">
-    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+    <div class="card-header bg-dark text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
       <span class="fw-semibold">Danh sách Lỗ hổng Phát hiện (<span id="findingsCountBadge">0</span>)</span>
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <select
+          id="findingSeverityFilter"
+          class="form-select form-select-sm"
+          style="width: auto;"
+          aria-label="Lọc theo mức độ nghiêm trọng"
+        >
+          <option value="ALL">Tất cả mức độ</option>
+          <option value="CRITICAL">CRITICAL</option>
+          <option value="HIGH">HIGH</option>
+          <option value="MEDIUM">MEDIUM</option>
+          <option value="LOW">LOW</option>
+          <option value="INFO">INFO</option>
+        </select>
+        <input
+          type="search"
+          id="findingKeywordFilter"
+          class="form-control form-control-sm"
+          style="min-width: 240px;"
+          placeholder="Lọc theo URL, loại lỗ hổng, param, CWE..."
+          aria-label="Lọc lỗ hổng theo từ khóa"
+        >
+        <button type="button" id="clearFindingFilterBtn" class="btn btn-outline-light btn-sm">
+          Xóa lọc
+        </button>
+      </div>
     </div>
     <div class="card-body p-0">
       <div class="table-responsive">
