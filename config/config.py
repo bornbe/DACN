@@ -51,6 +51,30 @@ def parse_trusted_proxies(raw: Any) -> tuple[str, ...]:
     return tuple(cleaned)
 
 
+def parse_authorized_domains(raw: Any) -> tuple[str, ...]:
+    """
+    Chuẩn hóa danh sách domain được phép kiểm thử ngoài localhost (ví dụ: okiaconpet.cloud).
+    """
+    if not raw or isinstance(raw, bool):
+        return ()
+    if isinstance(raw, str):
+        candidates = raw.split(",")
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        candidates = [str(item) for item in raw]
+    else:
+        return ()
+
+    cleaned: list[str] = []
+    for item in candidates:
+        domain = item.strip().lower()
+        if domain.startswith("*."):
+            domain = domain[2:]
+        domain = domain.strip(".")
+        if domain and domain not in cleaned:
+            cleaned.append(domain)
+    return tuple(cleaned)
+
+
 def validate_production_secrets(secret_key: str | None, jwt_secret_key: str | None) -> None:
     """
     Ở môi trường production, không cho phép dùng secret mặc định, rỗng hoặc quá ngắn.
@@ -105,6 +129,11 @@ class Config:
     # Mặc định rỗng: không tin tưởng header X-Forwarded-For từ bất kỳ nguồn nào.
     TRUSTED_PROXIES: tuple[str, ...] = parse_trusted_proxies(os.getenv("TRUSTED_PROXIES", ""))
     TRUSTED_PROXY: bool = False
+
+    # Danh sách domain mục tiêu được ủy quyền kiểm thử (ngoài localhost/loopback)
+    AUTHORIZED_TARGET_DOMAINS: tuple[str, ...] = parse_authorized_domains(
+        os.getenv("AUTHORIZED_TARGET_DOMAINS", "okiaconpet.cloud")
+    )
 
     # Giới hạn triển khai single-process (1 process + background worker thread).
     WORKER_PROCESSES: int = int(os.getenv("WORKER_PROCESSES", os.getenv("WEB_CONCURRENCY", "1")))

@@ -958,6 +958,7 @@
 
     const stopBtn = document.getElementById("stopScanBtn");
     const txtBtn = document.getElementById("downloadTxtBtn");
+    const docxBtn = document.getElementById("downloadDocxBtn");
     const pdfBtn = document.getElementById("downloadPdfBtn");
     const closeModalBtn = document.getElementById("closeFindingModalBtn");
     const modalBackdrop = document.getElementById("findingDetailModal");
@@ -1016,6 +1017,12 @@
     if (txtBtn) {
       txtBtn.addEventListener("click", function () {
         downloadReportFile(sessionId, "txt", "detailAlert");
+      });
+    }
+
+    if (docxBtn) {
+      docxBtn.addEventListener("click", function () {
+        downloadReportFile(sessionId, "docx", "detailAlert");
       });
     }
 

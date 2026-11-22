@@ -12,6 +12,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
+from config.config import Config
 from core.security.dns_resolver import DNSResolutionError, ResolverFunc, resolve_hostname
 
 _HOSTNAME_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -66,19 +67,77 @@ def is_loopback_hostname(hostname: str) -> bool:
     return is_loopback_ip(host)
 
 
+def is_public_global_ip(ip_value: str | ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """
+    Trả về True CHỈ KHI địa chỉ IP là địa chỉ công khai (Public Global IP).
+    Chặn tuyệt đối loopback, private LAN, link-local/metadata, unspecified, multicast, reserved.
+    """
+    try:
+        if isinstance(ip_value, str):
+            cleaned = ip_value.strip().strip("[]").split("%")[0]
+            addr = ipaddress.ip_address(cleaned)
+        else:
+            addr = ip_value
+    except ValueError:
+        return False
+
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+
+    return bool(
+        addr.is_global
+        and not addr.is_loopback
+        and not addr.is_private
+        and not addr.is_link_local
+        and not addr.is_unspecified
+        and not addr.is_multicast
+        and not addr.is_reserved
+    )
+
+
+def is_authorized_target_hostname(hostname: str) -> bool:
+    """
+    Kiểm tra hostname có thuộc `localhost` / loopback HOẶC nằm trong danh sách
+    `Config.AUTHORIZED_TARGET_DOMAINS` (ví dụ: `okiaconpet.cloud`, `*.okiaconpet.cloud`) hay không.
+    """
+    if is_loopback_hostname(hostname):
+        return True
+    host = (hostname or "").strip().strip("[]").lower().rstrip(".")
+    if not host:
+        return False
+    for allowed in Config.AUTHORIZED_TARGET_DOMAINS:
+        if host == allowed:
+            return True
+        suffix = f".{allowed}"
+        if host.endswith(suffix):
+            prefix = host[: -len(suffix)]
+            if not prefix or prefix.startswith(".") or prefix.endswith(".") or ".." in prefix:
+                continue
+            labels = prefix.split(".")
+            if all(bool(_HOSTNAME_LABEL_RE.match(label)) for label in labels):
+                return True
+    return False
+
+
 def validate_resolved_ips(hostname: str, ips: list[str]) -> list[str]:
     """
-    Xác minh mọi địa chỉ IP phân giải được từ hostname đều thuộc loopback.
-    Nếu có bất kỳ IP nào ngoài loopback (ví dụ `192.168.1.1`, `169.254.169.254`, IP public),
-    ném `SSRFBlockedError` ngay lập tức.
+    Xác minh mọi địa chỉ IP phân giải được từ hostname:
+    - Với `localhost` / loopback: mọi IP bắt buộc thuộc loopback (`127.0.0.0/8`, `::1`).
+    - Với domain ủy quyền (`AUTHORIZED_TARGET_DOMAINS`): cho phép loopback (`127.0.0.1`) hoặc IP công khai,
+      nhưng vẫn chặn tuyệt đối mạng nội bộ Private (`10/8`, `172.16/12`, `192.168/16`) và Link-Local/Metadata.
     """
     if not ips:
         raise SSRFBlockedError("Không phân giải được địa chỉ IP hợp lệ cho mục tiêu.")
+
+    is_custom_domain = is_authorized_target_hostname(hostname) and not is_loopback_hostname(hostname)
     for ip_str in ips:
-        if not is_loopback_ip(ip_str):
-            raise SSRFBlockedError(
-                f"Mục tiêu bị từ chối vì phân giải tới địa chỉ ngoài loopback ({ip_str})."
-            )
+        if is_loopback_ip(ip_str):
+            continue
+        if is_custom_domain and is_public_global_ip(ip_str):
+            continue
+        raise SSRFBlockedError(
+            f"Mục tiêu bị từ chối vì phân giải tới địa chỉ không được phép ({ip_str})."
+        )
     return ips
 
 
@@ -122,9 +181,9 @@ def validate_target_url(
             "URL phải dùng HTTP(S), có hostname và không chứa thông tin xác thực."
         )
 
-    if not is_loopback_hostname(hostname):
+    if not is_authorized_target_hostname(hostname):
         raise SSRFBlockedError(
-            "Chỉ chấp nhận mục tiêu lab trên localhost hoặc địa chỉ loopback."
+            "Chỉ chấp nhận mục tiêu lab trên localhost, loopback hoặc domain được ủy quyền."
         )
 
     if resolve_dns:

@@ -46,7 +46,7 @@ def download_scan_report(session_id: int) -> ResponseReturnValue:
         return (
             jsonify(
                 error="Bad Request",
-                message="Tham số format không hợp lệ; chỉ hỗ trợ 'pdf' hoặc 'txt'.",
+                message="Tham số format không hợp lệ; chỉ hỗ trợ 'pdf', 'docx' hoặc 'txt'.",
             ),
             400,
         )
@@ -68,6 +68,18 @@ def download_scan_report(session_id: int) -> ResponseReturnValue:
     if fmt == "txt":
         content = report_service.render_text(report_data)
         return Response(content, status=200, mimetype="text/plain; charset=utf-8", headers=headers)
+
+    if fmt == "docx":
+        try:
+            docx_bytes = report_service.render_docx_bytes(report_data)
+        except RuntimeError as exc:
+            return jsonify(error="Service Unavailable", message=str(exc)), 503
+        return Response(
+            docx_bytes,
+            status=200,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers=headers,
+        )
 
     try:
         pdf_bytes = report_service.render_pdf_bytes(report_data)
