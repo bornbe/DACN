@@ -17,7 +17,12 @@ from core.engine.scan_context import ScanContext
 from core.engine.scan_engine import ScanEngine, normalize_modules
 from core.scanners import ALL_MODULES
 from core.security.target_validator import validate_target_url
-from services.report_service import SUPPORTED_FORMATS, export_report, render_markdown_table
+from services.report_service import (
+    SUPPORTED_FORMATS,
+    export_report,
+    render_markdown_table,
+    resolve_report_output_path,
+)
 
 BAR_WIDTH = 30
 
@@ -46,7 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o",
         "--output",
-        help=f"Tệp báo cáo xuất ra; định dạng theo đuôi tệp ({', '.join(SUPPORTED_FORMATS)}).",
+        help=f"Tệp báo cáo xuất ra; định dạng theo đuôi tệp ({', '.join(SUPPORTED_FORMATS)}). Nếu chỉ nhập tên tệp, tự lưu vào Documents.",
+    )
+    parser.add_argument(
+        "-f",
+        "--format",
+        choices=list(SUPPORTED_FORMATS),
+        help="Định dạng xuất báo cáo trực tiếp vào thư mục Documents khi không truyền -o (pdf, docx, txt, json).",
     )
     parser.add_argument("--max-pages", type=int, default=100, help="Số trang crawl tối đa (mặc định 100).")
     parser.add_argument("--timeout", type=int, default=10, help="Timeout mỗi request, giây (mặc định 10).")
@@ -159,9 +170,12 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(render_markdown_table(data["findings"]))
 
-    if args.output:
+    if args.output or args.format:
         try:
-            path = export_report(data, args.output)
+            target_out = args.output or resolve_report_output_path(
+                None, fmt=args.format, target_url=data.get("target_url", "")
+            )
+            path = export_report(data, target_out, fmt=args.format)
             print(f"\n[+] Đã xuất báo cáo: {path}")
         except Exception as exc:  # noqa: BLE001
             print(f"\n[!] Xuất báo cáo thất bại: {exc}", file=sys.stderr)

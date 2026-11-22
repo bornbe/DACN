@@ -11,8 +11,10 @@ import logging
 import os
 import re
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
 from config.config import BASE_DIR, Config
@@ -24,8 +26,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
-SUPPORTED_FORMATS = ("txt", "json", "pdf")
-API_REPORT_FORMATS = ("txt", "pdf")
+SUPPORTED_FORMATS = ("txt", "json", "pdf", "docx")
+API_REPORT_FORMATS = ("txt", "pdf", "docx")
 
 # Loại bỏ các ký tự điều khiển XML không hợp lệ trước khi đưa vào ReportLab Paragraph
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -471,22 +473,163 @@ def render_pdf_bytes(report: dict[str, Any]) -> bytes:
     return buffer.getvalue()
 
 
+def get_documents_dir() -> Path:
+    """Trả về đường dẫn thư mục Documents của người dùng hiện tại."""
+    docs = Path.home() / "Documents"
+    docs.mkdir(parents=True, exist_ok=True)
+    return docs
+
+
+def resolve_report_output_path(
+    output_path: str | Path | None,
+    fmt: str = "pdf",
+    target_url: str = "",
+) -> Path:
+    """
+    Chuẩn hóa đường dẫn xuất báo cáo:
+    - Nếu không truyền `output_path`, tự sinh tên tệp theo domain + thời gian trong `Documents`.
+    - Nếu chỉ truyền tên tệp (không kèm thư mục, ví dụ `baocao.pdf` hoặc `baocao.docx`), tự lưu vào `Documents`.
+    - Nếu truyền đường dẫn có thư mục cụ thể (ví dụ `benchmark/artifacts/...`), giữ nguyên đường dẫn đó.
+    """
+    if output_path is None or not str(output_path).strip():
+        host = (urlsplit(target_url).hostname or "target").replace(".", "_")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return get_documents_dir() / f"scan_report_{host}_{stamp}.{fmt.lower()}"
+
+    raw = str(output_path).strip()
+    candidate = Path(raw)
+    if candidate.parent == Path(".") and not raw.startswith((".", "/", "\\")):
+        return get_documents_dir() / candidate.name
+    return candidate
+
+
+def _clean_docx_text(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return _CONTROL_CHARS_RE.sub("", text)
+
+
+def write_docx(report: dict[str, Any], destination: str | Path | IO[bytes]) -> None:
+    """Xuất báo cáo kỹ thuật định dạng Word (.docx) bằng thư viện python-docx."""
+    try:
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+    except ImportError as exc:
+        raise RuntimeError(
+            "Thiếu thư viện python-docx. Cài đặt bằng: pip install python-docx"
+        ) from exc
+
+    doc = Document()
+    normal_style = doc.styles["Normal"]
+    normal_style.font.name = "Calibri"
+    normal_style.font.size = Pt(10.5)
+
+    title = doc.add_heading("BÁO CÁO KIỂM THỬ BẢO MẬT WEB (OWASP)", level=0)
+    if title.runs:
+        title.runs[0].font.color.rgb = RGBColor(0x1E, 0x3A, 0x8A)
+
+    summary = _compute_normalized_summary(report)
+    findings = report.get("findings") or []
+
+    # 1. Thông tin phiên kiểm thử
+    doc.add_heading("1. Thông tin phiên kiểm thử", level=1)
+    info_items = [
+        ("Mục tiêu (Target)", report.get("target_url") or "-"),
+        ("Trạng thái", report.get("status") or "-"),
+        ("Thời gian", f"{report.get('start_time') or '-'} -> {report.get('end_time') or '-'}"),
+        ("Thời lượng", f"{report.get('duration_seconds', 0)}s"),
+        ("Modules", ", ".join(report.get("modules") or []) or "-"),
+        ("Trang đã crawl", str(summary.get("pages_crawled", 0))),
+        ("Tổng endpoints", str(summary.get("total_endpoints", 0))),
+        ("Tổng lỗ hổng phát hiện", str(summary.get("total_findings", 0))),
+    ]
+    info_table = doc.add_table(rows=len(info_items), cols=2)
+    info_table.style = "Table Grid"
+    for row_idx, (label, val) in enumerate(info_items):
+        row_cells = info_table.rows[row_idx].cells
+        row_cells[0].text = _clean_docx_text(label)
+        if row_cells[0].paragraphs and row_cells[0].paragraphs[0].runs:
+            row_cells[0].paragraphs[0].runs[0].bold = True
+        row_cells[1].text = _clean_docx_text(val)
+
+    # 2. Tóm lược phân bố lỗ hổng
+    doc.add_heading("2. Tóm lược điều hành & Phân bố lỗ hổng", level=1)
+    counts = summary.get("severity_counts") or {}
+    total_findings = int(summary.get("total_findings") or 0)
+    dist_table = doc.add_table(rows=len(SEVERITY_ORDER) + 1, cols=3)
+    dist_table.style = "Table Grid"
+    for col_idx, header_text in enumerate(("Mức độ", "Số lượng", "Tỉ lệ (%)")):
+        cell = dist_table.rows[0].cells[col_idx]
+        cell.text = header_text
+        if cell.paragraphs and cell.paragraphs[0].runs:
+            cell.paragraphs[0].runs[0].bold = True
+    for idx, sev in enumerate(SEVERITY_ORDER, 1):
+        cnt = int(counts.get(sev, 0) or 0)
+        ratio = (cnt / total_findings * 100.0) if total_findings > 0 else 0.0
+        dist_table.rows[idx].cells[0].text = sev
+        dist_table.rows[idx].cells[1].text = str(cnt)
+        dist_table.rows[idx].cells[2].text = f"{ratio:.1f}%"
+
+    # 3. Chi tiết kỹ thuật các phát hiện
+    doc.add_heading("3. Chi tiết kỹ thuật các phát hiện (Technical Findings)", level=1)
+    if not findings:
+        doc.add_paragraph("Không phát hiện lỗ hổng nào trong phạm vi kiểm thử.")
+    for idx, f in enumerate(findings, 1):
+        vuln_name = f.get("vuln_name") or f.get("vuln_type") or "Unknown Vulnerability"
+        sev = (f.get("severity") or "INFO").upper()
+        param = f.get("parameter") if f.get("parameter") is not None else f.get("param")
+        doc.add_heading(f"{idx}. {_clean_docx_text(vuln_name)}", level=2)
+
+        detail_rows = [
+            ("Severity", sev),
+            ("URL", f.get("target_url") or "-"),
+            ("Parameter", param or "-"),
+            ("Payload", f.get("payload") or "-"),
+            ("CWE / OWASP", f"{f.get('cwe_id') or '-'} / {f.get('owasp_category') or '-'}"),
+            ("Evidence", f.get("evidence") or "-"),
+            ("Remediation", f.get("remediation") or "-"),
+        ]
+        f_table = doc.add_table(rows=len(detail_rows), cols=2)
+        f_table.style = "Table Grid"
+        for r_idx, (k, v) in enumerate(detail_rows):
+            cells = f_table.rows[r_idx].cells
+            cells[0].text = k
+            if cells[0].paragraphs and cells[0].paragraphs[0].runs:
+                cells[0].paragraphs[0].runs[0].bold = True
+            cells[1].text = _clean_docx_text(v)
+        doc.add_paragraph()
+
+    target_dest: str | IO[bytes] = str(destination) if isinstance(destination, (Path, str)) else destination
+    doc.save(target_dest)
+
+
+def render_docx_bytes(report: dict[str, Any]) -> bytes:
+    """Kết xuất báo cáo Word (.docx) trực tiếp ra bộ nhớ đệm bytes."""
+    buffer = io.BytesIO()
+    write_docx(report, buffer)
+    return buffer.getvalue()
+
+
 def export_report(report: dict[str, Any], output_path: str | Path, fmt: str | None = None) -> Path:
     """
     Ghi báo cáo ra tệp. Định dạng suy ra từ đuôi tệp nếu `fmt` không được truyền.
-    Hỗ trợ: txt, json, pdf.
+    Nếu chỉ truyền tên tệp (không có thư mục), tự động lưu vào thư mục `Documents`.
+    Hỗ trợ: txt, json, pdf, docx.
     """
-    path = Path(output_path)
-    fmt = (fmt or path.suffix.lstrip(".") or "txt").lower()
-    if fmt not in SUPPORTED_FORMATS:
-        raise ValueError(f"Định dạng '{fmt}' không được hỗ trợ. Chọn: {', '.join(SUPPORTED_FORMATS)}")
+    raw_path = Path(output_path)
+    resolved_fmt = (fmt or raw_path.suffix.lstrip(".") or "txt").lower()
+    if resolved_fmt not in SUPPORTED_FORMATS:
+        raise ValueError(f"Định dạng '{resolved_fmt}' không được hỗ trợ. Chọn: {', '.join(SUPPORTED_FORMATS)}")
+
+    path = resolve_report_output_path(output_path, fmt=resolved_fmt, target_url=str(report.get("target_url") or ""))
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    if fmt == "json":
+    if resolved_fmt == "json":
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    elif fmt == "txt":
+    elif resolved_fmt == "txt":
         path.write_text(render_text(report), encoding="utf-8")
+    elif resolved_fmt == "docx":
+        write_docx(report, path)
     else:
         write_pdf(report, path)
     return path
