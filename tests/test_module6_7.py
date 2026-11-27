@@ -321,7 +321,7 @@ def test_report_endpoint_rejects_invalid_formats(client):
     owner_id, owner_headers = _register_and_login(client, "owner2", "owner2@example.test")
     scan_id = _seed_completed_scan_with_special_chars(client, owner_id)
 
-    for bad_query in ("", "?format=", "?format=json", "?format=html", "?format=../txt", "?format=exe"):
+    for bad_query in ("", "?format=", "?format=xml", "?format=csv", "?format=../txt", "?format=exe"):
         resp = client.get(f"/api/scans/{scan_id}/report{bad_query}", headers=owner_headers)
         assert resp.status_code == 400
 

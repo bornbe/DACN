@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+import secrets
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
@@ -32,6 +33,19 @@ class ScanStatus(str, Enum):
     NO_MODULES = "NO_MODULES"
 
 
+class TargetAuthorizationStatus(str, Enum):
+    """Trạng thái xác minh/cấp phép quyền sở hữu mục tiêu kiểm thử."""
+
+    PENDING = "PENDING"
+    VERIFIED = "VERIFIED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+def _generate_verification_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
 class ScanTarget(Base, TimestampMixin):
     """Bảng quản lý thông tin mục tiêu kiểm thử (Target Website)."""
 
@@ -42,6 +56,29 @@ class ScanTarget(Base, TimestampMixin):
     # URL mục tiêu được mã hóa At-Rest (tất định để vẫn truy vấn so khớp bằng được)
     url: Mapped[str] = mapped_column(EncryptedText(deterministic=True), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    owner_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    scope: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=True,
+    )
+    authorization_status: Mapped[str] = mapped_column(
+        String(32),
+        default=TargetAuthorizationStatus.PENDING.value,
+        nullable=False,
+        index=True,
+    )
+    verification_token: Mapped[str | None] = mapped_column(
+        String(128),
+        default=_generate_verification_token,
+        nullable=True,
+    )
+    verification_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     sessions: Mapped[list["ScanSession"]] = relationship(
         "ScanSession",
@@ -49,14 +86,21 @@ class ScanTarget(Base, TimestampMixin):
         cascade="all, delete-orphan",
     )
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, include_token: bool = False) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
             "url": self.url,
             "description": self.description,
+            "owner_id": self.owner_id,
+            "scope": self.scope or {},
+            "authorization_status": self.authorization_status,
+            "verification_method": self.verification_method,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+        if include_token:
+            payload["verification_token"] = self.verification_token
+        return payload
 
 
 class ScanSession(Base, TimestampMixin):

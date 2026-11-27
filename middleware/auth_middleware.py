@@ -11,6 +11,7 @@ from flask import current_app, g, jsonify, request
 from flask.typing import ResponseReturnValue
 from sqlalchemy.orm import Session, sessionmaker
 
+from models.user import normalize_role_alias
 from services.auth_service import decode_token
 from services.user_service import get_by_id
 
@@ -40,3 +41,31 @@ def require_auth(view: Callable[P, ResponseReturnValue]) -> Callable[P, Response
             return view(*args, **kwargs)
 
     return wrapped
+
+
+def require_role(*allowed_roles: str) -> Callable[[Callable[P, ResponseReturnValue]], Callable[P, ResponseReturnValue]]:
+    """
+    Decorator phân quyền RBAC theo vai trò (`admin`, `tester`/`pentester`).
+    Có thể dùng độc lập hoặc đặt dưới `@require_auth`. Trả 403 nếu không đủ quyền.
+    """
+    normalized_allowed = frozenset(normalize_role_alias(r) for r in allowed_roles if r)
+
+    def decorator(view: Callable[P, ResponseReturnValue]) -> Callable[P, ResponseReturnValue]:
+        @wraps(view)
+        def _checked(*args: P.args, **kwargs: P.kwargs) -> ResponseReturnValue:
+            user = getattr(g, "user", None)
+            if user is None:
+                return jsonify(error="Unauthorized", message="Chưa xác thực người dùng."), 401
+            if normalize_role_alias(user.role) not in normalized_allowed:
+                return (
+                    jsonify(
+                        error="Forbidden",
+                        message="Bạn không có quyền truy cập chức năng này.",
+                    ),
+                    403,
+                )
+            return view(*args, **kwargs)
+
+        return require_auth(_checked)
+
+    return decorator

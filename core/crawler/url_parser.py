@@ -35,6 +35,10 @@ class URLParser:
 
     DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
 
+    # Các đường dẫn quản trị/API của chính nền tảng sẽ bị loại trừ nếu tự quét chính APP_BASE_URL
+    SELF_SCAN_EXCLUDED_PREFIXES: tuple[str, ...] = ("/api/", "/scans/")
+    SELF_SCAN_EXCLUDED_EXACT: frozenset[str] = frozenset({"/api", "/scans"})
+
     def __init__(self, base_url: str) -> None:
         normalized = self.normalize(base_url)
         parsed = urlparse(normalized)
@@ -48,6 +52,27 @@ class URLParser:
         if self.base_domain.startswith("www."):
             self.base_domain = self.base_domain[4:]
         self._allow_subdomains: bool = "." in self.base_domain and not self._is_ip(self.base_domain)
+        self._is_self_app_host: bool = self._detect_self_app_host(self.base_hostname)
+
+    @staticmethod
+    def _detect_self_app_host(hostname: str) -> bool:
+        """Kiểm tra mục tiêu có trùng với hostname của chính nền tảng (APP_BASE_URL) hay không."""
+        if not hostname or hostname == "localhost":
+            return False
+        try:
+            ipaddress.ip_address(hostname)
+            return False
+        except ValueError:
+            pass
+        try:
+            from config.config import Config
+
+            app_host = (urlparse(Config.APP_BASE_URL).hostname or "").lower().rstrip(".")
+            if not app_host:
+                return False
+            return hostname == app_host or hostname.endswith("." + app_host)
+        except Exception:
+            return False
 
     @staticmethod
     def _is_ip(host: str) -> bool:
@@ -154,8 +179,14 @@ class URLParser:
         return port == self.base_port or (port in default_ports and self.base_port in default_ports)
 
     def is_crawlable(self, url: str) -> bool:
-        """Loại bỏ các liên kết trỏ tới tài nguyên tĩnh (ảnh, css, js, tài liệu...)."""
+        """
+        Loại bỏ các liên kết trỏ tới tài nguyên tĩnh (ảnh, css, js, tài liệu...)
+        và chặn tự quét vòng lặp vào `/api/`, `/scans/` khi mục tiêu là chính APP_BASE_URL.
+        """
         path = urlparse(url).path.lower()
+        if self._is_self_app_host:
+            if path in self.SELF_SCAN_EXCLUDED_EXACT or path.startswith(self.SELF_SCAN_EXCLUDED_PREFIXES):
+                return False
         return not any(path.endswith(ext) for ext in self.SKIP_EXTENSIONS)
 
     @staticmethod

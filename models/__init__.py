@@ -2,6 +2,7 @@
 Package tập hợp toàn bộ các ORM Entities của hệ thống OWASP Web Scanner.
 """
 
+from models.audit_log import AuditLog
 from models.base import (
     Base,
     TimestampMixin,
@@ -10,8 +11,16 @@ from models.base import (
     get_session_factory,
     init_db,
 )
-from models.scan_job import CrawledEndpoint, ScanJob, ScanSession, ScanStatus, ScanTarget
-from models.user import User
+from models.report import Report
+from models.scan_job import (
+    CrawledEndpoint,
+    ScanJob,
+    ScanSession,
+    ScanStatus,
+    ScanTarget,
+    TargetAuthorizationStatus,
+)
+from models.user import VALID_ROLES, User, normalize_role_alias
 from models.vulnerability import SeverityLevel, Vulnerability, VulnerabilityFinding
 
 __all__ = [
@@ -22,7 +31,10 @@ __all__ = [
     "get_db_session",
     "init_db",
     "User",
+    "VALID_ROLES",
+    "normalize_role_alias",
     "ScanTarget",
+    "TargetAuthorizationStatus",
     "ScanSession",
     "ScanJob",
     "ScanStatus",
@@ -30,4 +42,6 @@ __all__ = [
     "VulnerabilityFinding",
     "Vulnerability",
     "SeverityLevel",
+    "AuditLog",
+    "Report",
 ]

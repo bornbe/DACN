@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
-SUPPORTED_FORMATS = ("txt", "json", "pdf", "docx")
-API_REPORT_FORMATS = ("txt", "pdf", "docx")
+SUPPORTED_FORMATS = ("txt", "json", "pdf", "docx", "html")
+API_REPORT_FORMATS = ("txt", "pdf", "docx", "html", "json")
 
 # Loại bỏ các ký tự điều khiển XML không hợp lệ trước khi đưa vào ReportLab Paragraph
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -132,6 +132,7 @@ def build_session_report(
                 "cwe_id": item.cwe_id,
                 "owasp_category": item.owasp_category,
                 "remediation": item.remediation,
+                "source_tool": getattr(item, "source_tool", None) or "owasp_scanner",
             }
         )
 
@@ -609,11 +610,121 @@ def render_docx_bytes(report: dict[str, Any]) -> bytes:
     return buffer.getvalue()
 
 
+def render_json(report: dict[str, Any]) -> str:
+    """Kết xuất báo cáo chuẩn hóa dạng chuỗi JSON UTF-8, tự đồng bộ thống kê severity."""
+    payload = dict(report)
+    payload["summary"] = _compute_normalized_summary(report)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def render_json_bytes(report: dict[str, Any]) -> bytes:
+    """Kết xuất báo cáo JSON dưới dạng bytes UTF-8."""
+    return render_json(report).encode("utf-8")
+
+
+def render_html(report: dict[str, Any]) -> str:
+    """
+    Kết xuất báo cáo kỹ thuật dạng HTML độc lập (self-contained, chống XSS tuyệt đối):
+    Mọi trường động đều đi qua `_sanitize_xml_text(..., ascii_fallback=False)` để loại bỏ
+    ký tự điều khiển và escape đầy đủ `&`, `<`, `>`, `"`, `'`.
+    """
+    summary = _compute_normalized_summary(report)
+    counts = summary.get("severity_counts") or {}
+    findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+
+    esc = lambda val: _sanitize_xml_text(val, ascii_fallback=False)  # noqa: E731
+    session_id = esc(report.get("session_id") or "-")
+    target_url = esc(report.get("target_url") or "-")
+    status = esc(report.get("status") or "-")
+    max_depth = esc(report.get("max_depth") if report.get("max_depth") is not None else "-")
+    duration = esc(report.get("duration_seconds") if report.get("duration_seconds") is not None else 0)
+    start_time = esc(report.get("start_time") or "-")
+    end_time = esc(report.get("end_time") or "-")
+    modules_str = esc(", ".join(str(m) for m in (report.get("modules") or [])) or "-")
+
+    summary_cards = "".join(
+        f'<div class="sev-box"><div class="sev-label">{sev}</div>'
+        f'<div class="sev-val">{int(counts.get(sev, 0) or 0)}</div></div>'
+        for sev in SEVERITY_ORDER
+    )
+
+    if findings:
+        rows_html = []
+        for idx, item in enumerate(findings, 1):
+            vuln_name = esc(item.get("vuln_name") or item.get("vuln_type") or "Unknown Vulnerability")
+            sev = esc((item.get("severity") or "INFO").upper())
+            f_url = esc(item.get("target_url") or "-")
+            param = esc(item.get("parameter") if item.get("parameter") is not None else (item.get("param") or "-"))
+            cwe = esc(item.get("cwe_id") or "-")
+            owasp = esc(item.get("owasp_category") or "-")
+            tool = esc(item.get("source_tool") or "owasp_scanner")
+            payload_val = esc(item.get("payload") or "-")
+            evidence_val = esc(item.get("evidence") or "-")
+            remediation_val = esc(item.get("remediation") or "-")
+            rows_html.append(
+                f"<tr>"
+                f"<td>{idx}</td>"
+                f"<td><span class='badge sev-{sev.lower()}'>{sev}</span></td>"
+                f"<td><strong>{vuln_name}</strong><div class='muted'>Tool: {tool}</div></td>"
+                f"<td><code>{f_url}</code><div class='muted'>Param: {param}</div></td>"
+                f"<td>{cwe}<div class='muted'>{owasp}</div></td>"
+                f"<td><div><strong>Payload:</strong> <code>{payload_val}</code></div>"
+                f"<div><strong>Evidence:</strong> {evidence_val}</div></td>"
+                f"<td>{remediation_val}</td>"
+                f"</tr>"
+            )
+        findings_section = (
+            "<table><thead><tr>"
+            "<th>#</th><th>Severity</th><th>Vulnerability</th><th>URL &amp; Param</th>"
+            "<th>CWE / OWASP</th><th>Payload &amp; Evidence</th><th>Remediation</th>"
+            "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
+        )
+    else:
+        findings_section = "<p class='muted'>Không phát hiện lỗ hổng nào trong phạm vi kiểm thử.</p>"
+
+    return (
+        "<!DOCTYPE html><html lang='vi'><head><meta charset='UTF-8'>"
+        f"<title>OWASP Automated Pentest Report — Session #{session_id}</title>"
+        "<style>"
+        "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;color:#1f2937;line-height:1.5;}"
+        "h1{margin:0 0 4px;font-size:22px;}h2{font-size:16px;background:#111827;color:#fff;padding:8px 12px;border-radius:4px;}"
+        ".meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-bottom:16px;}"
+        ".sev-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:16px;text-align:center;}"
+        ".sev-box{border:1px solid #d1d5db;border-radius:6px;padding:10px;}.sev-label{font-size:12px;color:#6b7280;}.sev-val{font-size:20px;font-weight:700;}"
+        "table{width:100%;border-collapse:collapse;font-size:13px;}th,td{border:1px solid #d1d5db;padding:8px;vertical-align:top;text-align:left;}"
+        "th{background:#f3f4f6;}code{background:#f3f4f6;padding:1px 4px;border-radius:3px;word-break:break-all;}"
+        ".muted{color:#6b7280;font-size:12px;}.badge{display:inline-block;padding:2px 8px;border-radius:4px;color:#fff;font-weight:600;font-size:11px;}"
+        ".sev-critical{background:#7f1d1d;}.sev-high{background:#dc2626;}.sev-medium{background:#d97706;}.sev-low{background:#2563eb;}.sev-info{background:#4b5563;}"
+        "</style></head><body>"
+        f"<h1>OWASP AUTOMATED PENTEST REPORT</h1>"
+        f"<p class='muted'>Session ID: #{session_id} | Status: {status}</p>"
+        "<h2>1. Thông tin phiên kiểm thử &amp; Phạm vi (Scope)</h2>"
+        f"<div class='meta'>"
+        f"<div><strong>Target URL:</strong> <code>{target_url}</code></div>"
+        f"<div><strong>Max Depth:</strong> {max_depth}</div>"
+        f"<div><strong>Duration:</strong> {duration}s</div>"
+        f"<div><strong>Modules:</strong> {modules_str}</div>"
+        f"<div><strong>Start:</strong> {start_time}</div>"
+        f"<div><strong>End:</strong> {end_time}</div>"
+        "</div>"
+        "<h2>2. Tóm lược mức độ nghiêm trọng (Executive Summary)</h2>"
+        f"<div class='sev-grid'>{summary_cards}</div>"
+        f"<h2>3. Chi tiết kỹ thuật các phát hiện ({int(summary.get('total_findings', 0))})</h2>"
+        f"{findings_section}"
+        "</body></html>"
+    )
+
+
+def render_html_bytes(report: dict[str, Any]) -> bytes:
+    """Kết xuất báo cáo HTML dưới dạng bytes UTF-8."""
+    return render_html(report).encode("utf-8")
+
+
 def export_report(report: dict[str, Any], output_path: str | Path, fmt: str | None = None) -> Path:
     """
     Ghi báo cáo ra tệp. Định dạng suy ra từ đuôi tệp nếu `fmt` không được truyền.
     Nếu chỉ truyền tên tệp (không có thư mục), tự động lưu vào thư mục `Documents`.
-    Hỗ trợ: txt, json, pdf, docx.
+    Hỗ trợ: txt, json, pdf, docx, html.
     """
     raw_path = Path(output_path)
     resolved_fmt = (fmt or raw_path.suffix.lstrip(".") or "txt").lower()
@@ -625,9 +736,11 @@ def export_report(report: dict[str, Any], output_path: str | Path, fmt: str | No
         path.parent.mkdir(parents=True, exist_ok=True)
 
     if resolved_fmt == "json":
-        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(render_json(report), encoding="utf-8")
     elif resolved_fmt == "txt":
         path.write_text(render_text(report), encoding="utf-8")
+    elif resolved_fmt == "html":
+        path.write_text(render_html(report), encoding="utf-8")
     elif resolved_fmt == "docx":
         write_docx(report, path)
     else:

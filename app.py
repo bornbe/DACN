@@ -9,6 +9,7 @@ from typing import Any
 from flask import Flask, jsonify
 from flask.typing import ResponseReturnValue
 from sqlalchemy.orm import Session, sessionmaker
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config.config import (
     Config,
@@ -16,13 +17,39 @@ from config.config import (
     validate_production_secrets,
     validate_single_process_config,
 )
+from controllers.admin_controller import admin_blueprint
 from controllers.auth_controller import auth_blueprint
 from controllers.report_controller import report_blueprint
 from controllers.scan_controller import scan_blueprint
+from controllers.target_controller import target_blueprint
 from middleware.error_handler import register_error_handlers
-from middleware.rate_limiter import init_rate_limiter
+from middleware.rate_limiter import (
+    _compile_trusted_networks,
+    _is_trusted_proxy,
+    init_rate_limiter,
+)
 from models.base import get_session_factory, init_db
 from services.scan_service import configure_worker_session_factory
+
+
+class _TrustedProxyFixMiddleware:
+    """
+    Áp dụng `ProxyFix` (cập nhật `wsgi.url_scheme` và `HTTP_HOST` từ `X-Forwarded-Proto` /
+    `X-Forwarded-Host` của Cloudflare Tunnel / Reverse Proxy) CHỈ KHI `REMOTE_ADDR`
+    nằm trong danh sách `TRUSTED_PROXIES`. Giữ nguyên `REMOTE_ADDR` gốc để `rate_limiter`
+    và `audit_service` tự xác minh chống giả mạo IP trực tiếp.
+    """
+
+    def __init__(self, wsgi_app: Any, trusted_proxies: Any) -> None:
+        self._raw_app = wsgi_app
+        self._trusted_networks = _compile_trusted_networks(trusted_proxies)
+        self._proxy_app = ProxyFix(wsgi_app, x_for=0, x_proto=1, x_host=1, x_prefix=1)
+
+    def __call__(self, environ: dict[str, Any], start_response: Any) -> Any:
+        remote_addr = str(environ.get("REMOTE_ADDR") or "").strip()
+        if self._trusted_networks and _is_trusted_proxy(remote_addr, self._trusted_networks):
+            return self._proxy_app(environ, start_response)
+        return self._raw_app(environ, start_response)
 
 
 def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
@@ -51,13 +78,18 @@ def create_app(config: type[Config] | dict[str, Any] | None = None) -> Flask:
 
     app.register_blueprint(auth_blueprint)
     app.register_blueprint(scan_blueprint)
+    app.register_blueprint(target_blueprint)
+    app.register_blueprint(admin_blueprint)
     app.register_blueprint(report_blueprint)
     register_error_handlers(app)
+    trusted_proxies = app.config.get("TRUSTED_PROXIES")
+    if trusted_proxies:
+        app.wsgi_app = _TrustedProxyFixMiddleware(app.wsgi_app, trusted_proxies)  # type: ignore[method-assign]
     init_rate_limiter(
         app,
         limit=int(app.config.get("RATE_LIMIT_MAX_REQUESTS", 60)),
         window_seconds=int(app.config.get("RATE_LIMIT_WINDOW_SECONDS", 60)),
-        trusted_proxies=app.config.get("TRUSTED_PROXIES"),
+        trusted_proxies=trusted_proxies,
     )
 
     @app.get("/api/health")

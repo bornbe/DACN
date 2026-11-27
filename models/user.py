@@ -13,6 +13,19 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from models.base import Base, TimestampMixin
 
 
+VALID_ROLES: tuple[str, ...] = ("admin", "tester", "pentester")
+
+
+def normalize_role_alias(role: str | None) -> str:
+    """Chuẩn hóa bí danh vai trò: `pentester` và `tester` đều đại diện cho Security Tester."""
+    cleaned = (role or "").strip().lower()
+    if cleaned == "admin":
+        return "admin"
+    if cleaned in {"tester", "pentester"}:
+        return "tester"
+    return cleaned
+
+
 class User(Base, TimestampMixin):
     """Bảng lưu thông tin tài khoản người dùng quản trị/kiểm thử viên."""
 
@@ -24,6 +37,11 @@ class User(Base, TimestampMixin):
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     role: Mapped[str] = mapped_column(String(32), default="pentester", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    @property
+    def is_admin(self) -> bool:
+        """Kiểm tra người dùng có vai trò quản trị viên (`admin`) hay không."""
+        return normalize_role_alias(self.role) == "admin"
 
     def set_password(self, raw_password: str) -> None:
         """Băm mật khẩu an toàn trước khi lưu."""

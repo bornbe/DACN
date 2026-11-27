@@ -100,13 +100,23 @@ def create_scan(
     url: str,
     max_depth: int,
     modules: list[str],
+    target_id: int | None = None,
 ) -> ScanSession:
-    """Tạo target và phiên PENDING trong transaction của request."""
+    """Tạo (hoặc gắn với) ScanTarget và khởi tạo phiên PENDING trong transaction của request."""
     with _db_lock:
-        hostname = urlsplit(url).hostname or url
-        target = ScanTarget(name=hostname[:150], url=url, description="Authorized local lab target")
-        db.add(target)
-        db.flush()
+        target: ScanTarget | None = None
+        if target_id is not None:
+            target = db.get(ScanTarget, target_id)
+        if target is None:
+            hostname = urlsplit(url).hostname or url
+            target = ScanTarget(
+                name=hostname[:150],
+                url=url,
+                description="Authorized lab target",
+                owner_id=user_id,
+            )
+            db.add(target)
+            db.flush()
         scan = ScanSession(
             target_id=target.id,
             user_id=user_id,
@@ -317,6 +327,7 @@ def _persist_finding(db: Session, session_id: int, finding: Finding) -> None:
             cwe_id=finding.cwe_id,
             owasp_category=finding.owasp_category,
             remediation=finding.remediation,
+            source_tool=getattr(finding, "source_tool", None) or "owasp_scanner",
         )
     )
 
@@ -446,3 +457,78 @@ def list_findings(db: Session, session_id: int, user_id: int | None = None) -> l
         if user_id is not None:
             query = query.filter(ScanSession.user_id == user_id)
         return query.order_by(VulnerabilityFinding.id.asc()).all()
+
+
+def _finding_diff_key(item: VulnerabilityFinding) -> tuple[str, str, str]:
+    return (
+        (item.vuln_type or "").strip().lower(),
+        (item.target_url or "").strip(),
+        (item.param or "").strip(),
+    )
+
+
+def compare_scans(
+    db: Session,
+    *,
+    base_session_id: int,
+    target_session_id: int,
+    user_id: int,
+    is_admin: bool = False,
+) -> dict[str, Any] | None:
+    """
+    So sánh kết quả phát hiện giữa hai phiên quét (`base` -> `target`):
+    - `new_findings`: chỉ xuất hiện ở phiên `target` (lỗ hổng mới phát sinh).
+    - `fixed_findings`: có ở phiên `base` nhưng không còn ở phiên `target` (đã khắc phục).
+    - `persistent_findings`: tồn tại ở cả hai phiên.
+    """
+    from schemas.vulnerability_schema import format_vulnerability
+
+    owner_filter = None if is_admin else user_id
+    with _db_lock:
+        base_scan = get_scan(db, base_session_id, owner_filter)
+        target_scan = get_scan(db, target_session_id, owner_filter)
+        if base_scan is None or target_scan is None:
+            return None
+
+        base_items = list_findings(db, base_session_id, owner_filter)
+        target_items = list_findings(db, target_session_id, owner_filter)
+
+    base_map: dict[tuple[str, str, str], VulnerabilityFinding] = {}
+    for item in base_items:
+        base_map.setdefault(_finding_diff_key(item), item)
+
+    target_map: dict[tuple[str, str, str], VulnerabilityFinding] = {}
+    for item in target_items:
+        target_map.setdefault(_finding_diff_key(item), item)
+
+    new_keys = [k for k in target_map if k not in base_map]
+    fixed_keys = [k for k in base_map if k not in target_map]
+    persistent_keys = [k for k in target_map if k in base_map]
+
+    severities = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")
+    base_counts = {s: 0 for s in severities}
+    target_counts = {s: 0 for s in severities}
+    for item in base_map.values():
+        sev = (item.severity or "INFO").upper()
+        base_counts[sev if sev in base_counts else "INFO"] += 1
+    for item in target_map.values():
+        sev = (item.severity or "INFO").upper()
+        target_counts[sev if sev in target_counts else "INFO"] += 1
+
+    severity_delta = {s: target_counts[s] - base_counts[s] for s in severities}
+
+    return {
+        "base_scan": base_scan.to_dict(),
+        "target_scan": target_scan.to_dict(),
+        "summary": {
+            "new_count": len(new_keys),
+            "fixed_count": len(fixed_keys),
+            "persistent_count": len(persistent_keys),
+            "base_total": len(base_map),
+            "target_total": len(target_map),
+            "severity_delta": severity_delta,
+        },
+        "new_findings": [format_vulnerability(target_map[k]) for k in new_keys],
+        "fixed_findings": [format_vulnerability(base_map[k]) for k in fixed_keys],
+        "persistent_findings": [format_vulnerability(target_map[k]) for k in persistent_keys],
+    }

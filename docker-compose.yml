@@ -1,0 +1,69 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-scannerweb}
+      POSTGRES_USER: ${POSTGRES_USER:-scanner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-scanner} -d ${POSTGRES_DB:-scannerweb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - scanner_internal
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      APP_BASE_URL: ${APP_BASE_URL:-https://okiaconpet.cloud}
+      SECRET_KEY: ${SECRET_KEY:?Set strong SECRET_KEY (>=32 chars) in .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set strong JWT_SECRET_KEY (>=32 chars) in .env}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?Set 32-byte Base64/Hex ENCRYPTION_MASTER_KEY in .env}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-scanner}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-scannerweb}
+      WORKER_PROCESSES: "1"
+      TARGET_VERIFICATION_REQUIRED: ${TARGET_VERIFICATION_REQUIRED:-true}
+      AUTHORIZED_TARGET_DOMAINS: ${AUTHORIZED_TARGET_DOMAINS:-okiaconpet.cloud}
+      # Tin cậy kết nối nội bộ từ container cloudflared trong mạng bridge scanner_internal
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.28.0.0/16,127.0.0.1/32}
+      REPORT_UNICODE_FONT_PATH: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+    # Chỉ mở cổng 5000 ra loopback trên máy chủ (hoặc qua cloudflared nội bộ), không phơi trực tiếp ra Internet
+    ports:
+      - "127.0.0.1:5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - scanner_internal
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    networks:
+      - scanner_internal
+
+volumes:
+  postgres_data:
+
+networks:
+  scanner_internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
