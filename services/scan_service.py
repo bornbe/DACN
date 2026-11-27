@@ -360,16 +360,23 @@ def get_scan(db: Session, session_id: int, user_id: int | None = None) -> ScanSe
         return query.first()
 
 
-def stop_scan(db: Session, session_id: int, user_id: int) -> dict[str, Any] | None:
+def stop_scan(
+    db: Session,
+    session_id: int,
+    user_id: int | None,
+    *,
+    is_admin: bool = False,
+) -> dict[str, Any] | None:
     """
-    Yêu cầu dừng một phiên quét của người dùng:
+    Yêu cầu dừng một phiên quét của người dùng (hoặc Admin):
     - Phiên đã kết thúc (COMPLETED/FAILED/CANCELLED/NO_MODULES) -> báo already_finished.
     - Phiên PENDING (chưa được worker lấy) -> cập nhật có điều kiện sang CANCELLED.
     - Phiên đang hoạt động (RUNNING/CRAWLING/SCANNING) -> gửi stop signal tới ScanContext.stop_event.
-    Trả None nếu không tìm thấy phiên hoặc phiên không thuộc người dùng.
+    Trả None nếu không tìm thấy phiên hoặc phiên không thuộc người dùng (khi không phải Admin).
     """
+    owner_filter = None if is_admin else user_id
     with _db_lock:
-        scan = get_scan(db, session_id, user_id)
+        scan = get_scan(db, session_id, owner_filter)
         if scan is None:
             return None
         db.refresh(scan)
@@ -379,21 +386,19 @@ def stop_scan(db: Session, session_id: int, user_id: int) -> dict[str, Any] | No
 
         if scan.status == ScanStatus.PENDING.value:
             now = datetime.now(timezone.utc)
-            updated = (
-                db.query(ScanSession)
-                .filter(
-                    ScanSession.id == session_id,
-                    ScanSession.user_id == user_id,
-                    ScanSession.status == ScanStatus.PENDING.value,
-                )
-                .update(
-                    {
-                        ScanSession.status: ScanStatus.CANCELLED.value,
-                        ScanSession.end_time: now,
-                        ScanSession.error_message: CANCELLED_MESSAGE,
-                    },
-                    synchronize_session=False,
-                )
+            pending_query = db.query(ScanSession).filter(
+                ScanSession.id == session_id,
+                ScanSession.status == ScanStatus.PENDING.value,
+            )
+            if owner_filter is not None:
+                pending_query = pending_query.filter(ScanSession.user_id == owner_filter)
+            updated = pending_query.update(
+                {
+                    ScanSession.status: ScanStatus.CANCELLED.value,
+                    ScanSession.end_time: now,
+                    ScanSession.error_message: CANCELLED_MESSAGE,
+                },
+                synchronize_session=False,
             )
             db.commit()
             if updated == 1:
@@ -411,21 +416,19 @@ def stop_scan(db: Session, session_id: int, user_id: int) -> dict[str, Any] | No
             if scan.status in FINISHED_STATUSES:
                 return {"state": "already_finished", "status": scan.status}
             now = datetime.now(timezone.utc)
-            updated = (
-                db.query(ScanSession)
-                .filter(
-                    ScanSession.id == session_id,
-                    ScanSession.user_id == user_id,
-                    ScanSession.status.in_(ACTIVE_STATUSES),
-                )
-                .update(
-                    {
-                        ScanSession.status: ScanStatus.CANCELLED.value,
-                        ScanSession.end_time: now,
-                        ScanSession.error_message: CANCELLED_MESSAGE,
-                    },
-                    synchronize_session=False,
-                )
+            active_query = db.query(ScanSession).filter(
+                ScanSession.id == session_id,
+                ScanSession.status.in_(ACTIVE_STATUSES),
+            )
+            if owner_filter is not None:
+                active_query = active_query.filter(ScanSession.user_id == owner_filter)
+            updated = active_query.update(
+                {
+                    ScanSession.status: ScanStatus.CANCELLED.value,
+                    ScanSession.end_time: now,
+                    ScanSession.error_message: CANCELLED_MESSAGE,
+                },
+                synchronize_session=False,
             )
             db.commit()
             db.refresh(scan)
@@ -436,16 +439,13 @@ def stop_scan(db: Session, session_id: int, user_id: int) -> dict[str, Any] | No
         return {"state": "already_finished", "status": scan.status}
 
 
-def list_scans(db: Session, user_id: int, limit: int = 100) -> list[ScanSession]:
-    """Liệt kê tối đa 100 phiên gần nhất của người dùng."""
+def list_scans(db: Session, user_id: int | None, limit: int = 100) -> list[ScanSession]:
+    """Liệt kê tối đa 100 phiên gần nhất của người dùng (hoặc toàn bộ nếu `user_id=None` cho Admin)."""
     with _db_lock:
-        return (
-            db.query(ScanSession)
-            .filter(ScanSession.user_id == user_id)
-            .order_by(ScanSession.id.desc())
-            .limit(limit)
-            .all()
-        )
+        query = db.query(ScanSession)
+        if user_id is not None:
+            query = query.filter(ScanSession.user_id == user_id)
+        return query.order_by(ScanSession.id.desc()).limit(limit).all()
 
 
 def list_findings(db: Session, session_id: int, user_id: int | None = None) -> list[VulnerabilityFinding]:
@@ -517,6 +517,23 @@ def compare_scans(
 
     severity_delta = {s: target_counts[s] - base_counts[s] for s in severities}
 
+    base_url = (base_scan.target.url if base_scan.target else "") or ""
+    target_url = (target_scan.target.url if target_scan.target else "") or ""
+    base_origin = f"{urlsplit(base_url).scheme}://{urlsplit(base_url).netloc}".lower()
+    target_origin = f"{urlsplit(target_url).scheme}://{urlsplit(target_url).netloc}".lower()
+    different_targets = (
+        base_scan.target_id != target_scan.target_id and base_origin != target_origin
+    )
+
+    persistent_serialized: list[dict[str, Any]] = []
+    for k in persistent_keys:
+        entry = format_vulnerability(target_map[k])
+        prev_sev = (base_map[k].severity or "INFO").upper()
+        curr_sev = (target_map[k].severity or "INFO").upper()
+        if prev_sev != curr_sev:
+            entry["previous_severity"] = prev_sev
+        persistent_serialized.append(entry)
+
     return {
         "base_scan": base_scan.to_dict(),
         "target_scan": target_scan.to_dict(),
@@ -526,9 +543,10 @@ def compare_scans(
             "persistent_count": len(persistent_keys),
             "base_total": len(base_map),
             "target_total": len(target_map),
+            "different_targets": different_targets,
             "severity_delta": severity_delta,
         },
         "new_findings": [format_vulnerability(target_map[k]) for k in new_keys],
         "fixed_findings": [format_vulnerability(base_map[k]) for k in fixed_keys],
-        "persistent_findings": [format_vulnerability(target_map[k]) for k in persistent_keys],
+        "persistent_findings": persistent_serialized,
     }

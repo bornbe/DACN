@@ -465,3 +465,219 @@ def test_sqlite_legacy_schema_auto_adds_missing_columns(tmp_path):
         assert row[0] == "legacy"
         assert row[1] == "PENDING"
     upgraded_engine.dispose()
+
+
+def test_postgresql_dialect_auto_adds_missing_columns_ddl():
+    """F-01: Đảm bảo _ensure_missing_columns sinh đúng DDL `ADD COLUMN IF NOT EXISTS` cho PostgreSQL."""
+    from models.base import _ensure_missing_columns
+
+    executed_sql: list[str] = []
+    fake_conn = MagicMock()
+    fake_conn.execute.side_effect = lambda clause: executed_sql.append(str(clause))
+
+    fake_begin_ctx = MagicMock()
+    fake_begin_ctx.__enter__.return_value = fake_conn
+    fake_begin_ctx.__exit__.return_value = False
+
+    fake_engine = MagicMock()
+    fake_engine.dialect.name = "postgresql"
+    fake_engine.begin.return_value = fake_begin_ctx
+
+    fake_inspector = MagicMock()
+    fake_inspector.get_table_names.return_value = ["scan_targets", "vulnerability_findings"]
+    fake_inspector.get_columns.side_effect = lambda tbl: (
+        [{"name": "id"}, {"name": "name"}, {"name": "url"}]
+        if tbl == "scan_targets"
+        else [{"name": "id"}, {"name": "vuln_type"}]
+    )
+
+    with patch("models.base.inspect", return_value=fake_inspector):
+        added = _ensure_missing_columns(fake_engine)
+
+    assert "scan_targets.owner_id" in added
+    assert "scan_targets.authorization_status" in added
+    assert "vulnerability_findings.source_tool" in added
+    assert all("ADD COLUMN IF NOT EXISTS" in stmt for stmt in executed_sql)
+
+
+def test_admin_scan_access_consistency_across_list_detail_findings_and_stop(client):
+    """F-02: Admin truy cập nhất quán list, detail, findings và stop đối với phiên quét của user khác."""
+    owner_id, _ = _create_user_and_token(client, "scan_owner", "scanowner@example.test", role="tester")
+    _, stranger_headers = _create_user_and_token(client, "scan_stranger", "scanstranger@example.test", role="tester")
+    _, admin_headers = _create_user_and_token(client, "scan_admin", "scanadmin@example.test", role="admin")
+
+    factory = client.application.extensions["database_session_factory"]
+    with factory() as db:
+        scan = scan_service.create_scan(
+            db, user_id=owner_id, url="http://127.0.0.1:8080", max_depth=1, modules=["headers"]
+        )
+        db.add(
+            VulnerabilityFinding(
+                session_id=scan.id,
+                vuln_type="Missing Security Header: X-Frame-Options",
+                severity="LOW",
+                target_url="http://127.0.0.1:8080",
+                source_tool="headers_scanner",
+            )
+        )
+        db.commit()
+        session_id = scan.id
+
+    # User thường khác vẫn bị chặn 404 trên toàn bộ endpoint:
+    assert client.get(f"/api/scans/{session_id}", headers=stranger_headers).status_code == 404
+    assert client.get(f"/api/scans/{session_id}/findings", headers=stranger_headers).status_code == 404
+    assert client.post(f"/api/scans/{session_id}/stop", headers=stranger_headers).status_code == 404
+    assert client.get("/api/scans", headers=stranger_headers).get_json()["scans"] == []
+
+    # Admin xem được trong danh sách, xem chi tiết, xem findings và dừng phiên PENDING của user khác:
+    admin_list = client.get("/api/scans", headers=admin_headers)
+    assert admin_list.status_code == 200
+    assert any(s["id"] == session_id for s in admin_list.get_json()["scans"])
+
+    admin_detail = client.get(f"/api/scans/{session_id}", headers=admin_headers)
+    assert admin_detail.status_code == 200
+    assert admin_detail.get_json()["scan"]["id"] == session_id
+
+    admin_findings = client.get(f"/api/scans/{session_id}/findings", headers=admin_headers)
+    assert admin_findings.status_code == 200
+    assert len(admin_findings.get_json()["findings"]) == 1
+
+    admin_stop = client.post(f"/api/scans/{session_id}/stop", headers=admin_headers)
+    assert admin_stop.status_code == 202
+    assert admin_stop.get_json()["status"] == "CANCELLED"
+
+
+def test_result_manager_persist_findings_preserves_source_tool(client):
+    """F-03: ResultManager.persist_findings lưu đúng trường source_tool vào CSDL."""
+    from core.engine.result_manager import ResultManager
+    from core.scanners.base_scanner import Finding
+
+    owner_id, _ = _create_user_and_token(client, "rm_user", "rm@example.test")
+    factory = client.application.extensions["database_session_factory"]
+    with factory() as db:
+        scan = scan_service.create_scan(
+            db, user_id=owner_id, url="http://127.0.0.1:8080", max_depth=1, modules=["sqli"]
+        )
+        rm = ResultManager()
+        rm.add(
+            Finding(
+                vuln_name="SQL Injection (Error-based)",
+                severity="HIGH",
+                target_url="http://127.0.0.1:8080/item",
+                parameter="id",
+                source_tool="sqli_scanner",
+            )
+        )
+        saved = rm.persist_findings(db, scan.id)
+        assert saved == 1
+
+        stored = db.query(VulnerabilityFinding).filter(VulnerabilityFinding.session_id == scan.id).first()
+        assert stored is not None
+        assert stored.source_tool == "sqli_scanner"
+
+
+def test_bfs_crawler_collects_query_params_after_in_scope_redirect():
+    """F-04: Khi URL gốc chuyển hướng trong scope tới URL đích có query string, BFSCrawler thu thập được tham số."""
+    from core.crawler.bfs_crawler import BFSCrawler
+
+    fake_http = MagicMock()
+    fake_http.get.return_value = SimpleNamespace(
+        status_code=200,
+        url="http://127.0.0.1:8080/catalog?category=security&page=1",
+        headers={"Content-Type": "text/html; charset=utf-8"},
+        text="<html><body><h1>Catalog</h1></body></html>",
+        encoding="utf-8",
+        apparent_encoding="utf-8",
+    )
+
+    crawler = BFSCrawler("http://127.0.0.1:8080/start", max_depth=1, http_client=fake_http)
+    result = crawler.crawl()
+    matched = [
+        ep
+        for ep in result.endpoints
+        if ep.url == "http://127.0.0.1:8080/catalog" and ep.method == "GET"
+    ]
+    assert len(matched) == 1
+    assert matched[0].params == {"category": "security", "page": "1"}
+
+
+def test_compare_scans_metadata_and_sqli_boolean_confirmation_probe(client):
+    """F-06: Kiểm tra cảnh báo different_targets, previous_severity và confirmation probe chống nhiễu SQLi."""
+    from core.crawler.form_parser import EndpointDescriptor
+    from core.scanners.sqli_scanner import SQLiScanner
+
+    owner_id, owner_headers = _create_user_and_token(client, "f06_user", "f06@example.test")
+    factory = client.application.extensions["database_session_factory"]
+    with factory() as db:
+        scan_1 = scan_service.create_scan(
+            db, user_id=owner_id, url="http://127.0.0.1:8080", max_depth=1, modules=["headers"]
+        )
+        scan_2 = scan_service.create_scan(
+            db, user_id=owner_id, url="http://127.0.0.1:8090", max_depth=1, modules=["headers"]
+        )
+        db.add(
+            VulnerabilityFinding(
+                session_id=scan_1.id,
+                vuln_type="Weak Header",
+                severity="LOW",
+                target_url="http://127.0.0.1:8080",
+            )
+        )
+        db.add(
+            VulnerabilityFinding(
+                session_id=scan_2.id,
+                vuln_type="Weak Header",
+                severity="HIGH",
+                target_url="http://127.0.0.1:8080",
+            )
+        )
+        db.commit()
+        s1_id, s2_id = scan_1.id, scan_2.id
+
+    resp = client.get(f"/api/scans/compare?base={s1_id}&target={s2_id}", headers=owner_headers)
+    assert resp.status_code == 200
+    comp = resp.get_json()["comparison"]
+    assert comp["summary"]["different_targets"] is True
+    assert comp["persistent_findings"][0]["previous_severity"] == "LOW"
+    assert comp["persistent_findings"][0]["severity"] == "HIGH"
+
+    # Kiểm tra confirmation probe của SQLiScanner:
+    scanner = SQLiScanner()
+    ep = EndpointDescriptor(url="http://127.0.0.1:8080/item", method="GET", params={"id": "1"})
+    baseline_html = "<html><body>Item #1 Detailed Product Description Static Block AAAA BBBB CCCC</body></html>"
+    short_noise = "<html><body>Empty</body></html>"
+
+    # Kịch bản 1: Nhiễu tạm thời (lần 1 FALSE khác biệt, nhưng lần confirm FALSE lại giống baseline) -> bỏ qua FP:
+    flaky_responses = iter(
+        [
+            SimpleNamespace(text=baseline_html),  # baseline
+            SimpleNamespace(text=baseline_html),  # error probe '
+            SimpleNamespace(text=baseline_html),  # error probe "
+            SimpleNamespace(text=baseline_html),  # pair 1 TRUE
+            SimpleNamespace(text=short_noise),    # pair 1 FALSE (nhiễu tạm thời)
+            SimpleNamespace(text=baseline_html),  # confirm pair 1 TRUE
+            SimpleNamespace(text=baseline_html),  # confirm pair 1 FALSE (trở lại bình thường -> bác bỏ FP)
+            SimpleNamespace(text=baseline_html),  # pair 2 TRUE
+            SimpleNamespace(text=baseline_html),  # pair 2 FALSE
+        ]
+    )
+    with patch.object(scanner, "_send_values", side_effect=lambda *_a, **_kw: next(flaky_responses)):
+        assert scanner.scan(ep) == []
+
+    # Kịch bản 2: Lỗ hổng thật (cả lần đầu và lần confirm đều tái hiện sai khác TRUE/FALSE) -> ghi nhận Finding:
+    consistent_responses = iter(
+        [
+            SimpleNamespace(text=baseline_html),  # baseline
+            SimpleNamespace(text=baseline_html),  # error probe '
+            SimpleNamespace(text=baseline_html),  # error probe "
+            SimpleNamespace(text=baseline_html),  # pair 1 TRUE
+            SimpleNamespace(text=short_noise),    # pair 1 FALSE
+            SimpleNamespace(text=baseline_html),  # confirm pair 1 TRUE
+            SimpleNamespace(text=short_noise),    # confirm pair 1 FALSE -> xác nhận Boolean SQLi
+        ]
+    )
+    with patch.object(scanner, "_send_values", side_effect=lambda *_a, **_kw: next(consistent_responses)):
+        detected = scanner.scan(ep)
+        assert len(detected) == 1
+        assert detected[0].vuln_name == "SQL Injection (Boolean-based)"
+        assert "confirm=" in (detected[0].evidence or "")

@@ -71,6 +71,7 @@ class ResultManager:
                     cwe_id=f.cwe_id,
                     owasp_category=f.owasp_category,
                     remediation=f.remediation,
+                    source_tool=getattr(f, "source_tool", None) or "owasp_scanner",
                 )
             )
         db.commit()

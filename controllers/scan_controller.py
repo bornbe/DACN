@@ -123,9 +123,10 @@ def compare_scans_route() -> ResponseReturnValue:
 @scan_blueprint.get("/scans/<int:session_id>")
 @require_auth
 def get_scan_route(session_id: int) -> ResponseReturnValue:
-    """Trả trạng thái scan chỉ cho người sở hữu."""
+    """Trả trạng thái scan cho chủ sở hữu hoặc Admin."""
+    owner_filter = None if g.user.is_admin else g.user.id
     with _session_factory()() as db:
-        scan = scan_service.get_scan(db, session_id, g.user.id)
+        scan = scan_service.get_scan(db, session_id, owner_filter)
         if scan is None:
             return jsonify(error="Not Found", message="Không tìm thấy phiên quét."), 404
         return jsonify(scan=scan.to_dict()), 200
@@ -134,21 +135,22 @@ def get_scan_route(session_id: int) -> ResponseReturnValue:
 @scan_blueprint.get("/scans/<int:session_id>/findings")
 @require_auth
 def get_findings_route(session_id: int) -> ResponseReturnValue:
-    """Trả findings của phiên quét chỉ cho người sở hữu."""
+    """Trả findings của phiên quét cho chủ sở hữu hoặc Admin."""
+    owner_filter = None if g.user.is_admin else g.user.id
     with _session_factory()() as db:
-        scan = scan_service.get_scan(db, session_id, g.user.id)
+        scan = scan_service.get_scan(db, session_id, owner_filter)
         if scan is None:
             return jsonify(error="Not Found", message="Không tìm thấy phiên quét."), 404
-        findings = scan_service.list_findings(db, session_id, g.user.id)
+        findings = scan_service.list_findings(db, session_id, owner_filter)
         return jsonify(findings=[format_vulnerability(item) for item in findings]), 200
 
 
 @scan_blueprint.post("/scans/<int:session_id>/stop")
 @require_auth
 def stop_scan_route(session_id: int) -> ResponseReturnValue:
-    """Yêu cầu dừng một phiên quét; chỉ chủ sở hữu mới được dừng (fix review Critical #2)."""
+    """Yêu cầu dừng một phiên quét; chỉ chủ sở hữu hoặc Admin mới được dừng."""
     with _session_factory()() as db:
-        result = scan_service.stop_scan(db, session_id, g.user.id)
+        result = scan_service.stop_scan(db, session_id, g.user.id, is_admin=g.user.is_admin)
         if result is not None and result["state"] != "already_finished":
             audit_service.record_audit_log(
                 db,
@@ -172,7 +174,8 @@ def stop_scan_route(session_id: int) -> ResponseReturnValue:
 @scan_blueprint.get("/scans")
 @require_auth
 def list_scans_route() -> ResponseReturnValue:
-    """Liệt kê các phiên quét của người dùng hiện tại."""
+    """Liệt kê các phiên quét của người dùng hiện tại (hoặc toàn bộ nếu là Admin)."""
+    owner_filter = None if g.user.is_admin else g.user.id
     with _session_factory()() as db:
-        scans = scan_service.list_scans(db, g.user.id)
+        scans = scan_service.list_scans(db, owner_filter)
         return jsonify(scans=[scan.to_dict() for scan in scans]), 200

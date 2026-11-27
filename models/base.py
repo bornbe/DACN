@@ -93,39 +93,57 @@ def get_db_session() -> Generator[Session, None, None]:
         session.close()
 
 
-def _ensure_sqlite_columns(engine: Engine) -> None:
+EXPECTED_SCHEMA_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "scan_targets": [
+        ("owner_id", "INTEGER"),
+        ("scope", "JSON"),
+        ("authorization_status", "VARCHAR(32) NOT NULL DEFAULT 'PENDING'"),
+        ("verification_token", "VARCHAR(128)"),
+        ("verification_method", "VARCHAR(32)"),
+    ],
+    "vulnerability_findings": [
+        ("source_tool", "VARCHAR(64) DEFAULT 'owasp_scanner'"),
+    ],
+}
+
+
+def _ensure_missing_columns(engine: Engine) -> list[str]:
     """
-    Bổ sung các cột mới vào cơ sở dữ liệu SQLite hiện có nếu chưa tồn tại
-    (giúp tương thích ngược với tệp scannerweb.db cục bộ mà không làm mất dữ liệu).
+    Bổ sung các cột mới vào cơ sở dữ liệu hiện có (hỗ trợ cả SQLite và PostgreSQL)
+    để nâng cấp an toàn mà không làm mất dữ liệu hay lỗi `UndefinedColumn`.
+    Trả về danh sách các cột `table.column` vừa được thêm.
     """
-    if engine.dialect.name != "sqlite":
-        return
-    expected_columns: dict[str, list[tuple[str, str]]] = {
-        "scan_targets": [
-            ("owner_id", "INTEGER"),
-            ("scope", "JSON"),
-            ("authorization_status", "VARCHAR(32) NOT NULL DEFAULT 'PENDING'"),
-            ("verification_token", "VARCHAR(128)"),
-            ("verification_method", "VARCHAR(32)"),
-        ],
-        "vulnerability_findings": [
-            ("source_tool", "VARCHAR(64) DEFAULT 'owasp_scanner'"),
-        ],
-    }
+    dialect = engine.dialect.name
+    if dialect not in {"sqlite", "postgresql"}:
+        return []
+
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
+    added: list[str] = []
+
     with engine.begin() as conn:
-        for table_name, columns in expected_columns.items():
+        for table_name, columns in EXPECTED_SCHEMA_COLUMNS.items():
             if table_name not in existing_tables:
                 continue
             present = {col["name"] for col in inspector.get_columns(table_name)}
             for col_name, col_ddl in columns:
-                if col_name not in present:
-                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_ddl}"))
+                if col_name in present:
+                    continue
+                if dialect == "postgresql":
+                    stmt = f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_ddl}"
+                else:
+                    stmt = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_ddl}"
+                conn.execute(text(stmt))
+                added.append(f"{table_name}.{col_name}")
+    return added
+
+
+# Giữ bí danh tương thích ngược
+_ensure_sqlite_columns = _ensure_missing_columns
 
 
 def init_db(database_uri: str | None = None) -> Engine:
-    """Khởi tạo toàn bộ bảng CSDL từ ORM Metadata."""
+    """Khởi tạo toàn bộ bảng CSDL từ ORM Metadata và tự động bổ sung các cột mới."""
     # Import đầy đủ các models để đăng ký vào Base.metadata
     import models.audit_log  # noqa: F401
     import models.report  # noqa: F401
@@ -135,5 +153,5 @@ def init_db(database_uri: str | None = None) -> Engine:
 
     engine = get_engine(database_uri)
     Base.metadata.create_all(bind=engine)
-    _ensure_sqlite_columns(engine)
+    _ensure_missing_columns(engine)
     return engine

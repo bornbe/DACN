@@ -14,8 +14,9 @@ from models.base import init_db
 
 def run_migrations(database_uri: str | None = None) -> list[str]:
     """
-    Khởi tạo tất cả các bảng trong cơ sở dữ liệu theo định nghĩa SQLAlchemy ORM
-    và trả về danh sách các bảng đã tạo.
+    Khởi tạo tất cả các bảng trong cơ sở dữ liệu theo định nghĩa SQLAlchemy ORM,
+    tự động nâng cấp các cột mới còn thiếu trên cả SQLite và PostgreSQL,
+    và trả về danh sách các bảng hiện có.
     """
     engine = init_db(database_uri)
     inspector = inspect(engine)

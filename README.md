@@ -1,9 +1,9 @@
 # DACN — OWASP Web Vulnerability Scanner
 
-Hệ thống rà quét lỗ hổng bảo mật ứng dụng Web tự động theo chuẩn **OWASP Top 10** (`SQL Injection`, `Cross-Site Scripting - XSS`, `Cross-Site Request Forgery - CSRF`, `Security Misconfiguration / Missing Security Headers`), hỗ trợ giao diện dòng lệnh (CLI), RESTful API, Web Dashboard trực quan, xuất báo cáo kỹ thuật (`TXT`/`PDF`) và bộ công cụ đánh giá thực nghiệm (Benchmark) trong môi trường Docker cô lập.
+Hệ thống rà quét lỗ hổng bảo mật ứng dụng Web tự động theo chuẩn **OWASP Top 10** (`SQL Injection`, `Cross-Site Scripting - XSS`, `Cross-Site Request Forgery - CSRF`, `Security Misconfiguration / Missing Security Headers`), hỗ trợ giao diện dòng lệnh (CLI), RESTful API phân quyền RBAC (`Admin` / `Tester`), quản lý & xác minh quyền sở hữu mục tiêu (`Target Verification`), so sánh lịch sử phiên quét (`Scan Diffing`), nhật ký kiểm toán (`Audit Logs`), Web Dashboard trực quan, xuất báo cáo đa định dạng (`PDF` / `HTML` / `JSON` / `DOCX` / `TXT`), triển khai qua **Docker Compose + Cloudflare Tunnel** và bộ công cụ đánh giá thực nghiệm (Benchmark).
 
-> **Cảnh báo an toàn & Đạo đức (Authorized Local Lab Only):**
-> Công cụ này chỉ phục vụ mục đích học tập, nghiên cứu và kiểm thử trên môi trường Lab cục bộ được cấp phép (`localhost`, `*.localhost`, hoặc địa chỉ IP loopback `127.0.0.0/8` / `::1`). Mọi mục tiêu bên ngoài loopback, địa chỉ IP LAN/private, link-local/cloud metadata (`169.254.169.254`), hostname phân giải ra IP ngoài loopback hoặc HTTP redirect sang host ngoài loopback đều bị chặn cứng ở cả API, CLI, Engine, Crawler và `SafeHTTPClient`.
+> **Cảnh báo an toàn & Đạo đức (Authorized Scope Only):**
+> Công cụ này chỉ phục vụ mục đích học tập, nghiên cứu và kiểm thử trên môi trường Lab cục bộ (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`) hoặc tên miền thuộc quyền sở hữu được khai báo rõ trong `AUTHORIZED_TARGET_DOMAINS` (ví dụ `okiaconpet.cloud`) và đã xác minh quyền sở hữu (`WELL_KNOWN`, `DNS_TXT`, hoặc Admin phê duyệt khi bật `TARGET_VERIFICATION_REQUIRED=true`). Mọi địa chỉ IP LAN/private (`10/8`, `172.16/12`, `192.168/16`), link-local/cloud metadata (`169.254.169.254`), tên miền bên thứ ba ngoài danh sách ủy quyền hoặc HTTP redirect sang đích không hợp lệ đều bị chặn cứng ở API, CLI, Engine, Crawler và `SafeHTTPClient`.
 
 ---
 
@@ -40,7 +40,10 @@ JWT_SECRET_KEY=CHANGE_ME_EXAMPLE_JWT_SECRET_KEY_MIN_32_CHARS
 # Sinh khóa mới: python -c "import secrets; print(secrets.token_hex(32))"
 ENCRYPTION_MASTER_KEY=CHANGE_ME_EXAMPLE_64_HEX_CHARS_DO_NOT_USE_IN_PRODUCTION_00000000
 
-# Cấu hình Reverse Proxy & Worker (Single-process)
+# Cấu hình URL nền tảng, phạm vi ủy quyền & Cloudflare Tunnel / Reverse Proxy
+APP_BASE_URL=https://okiaconpet.cloud
+TARGET_VERIFICATION_REQUIRED=false
+AUTHORIZED_TARGET_DOMAINS=okiaconpet.cloud
 TRUSTED_PROXIES=
 WORKER_PROCESSES=1
 
@@ -90,31 +93,42 @@ Máy chủ lắng nghe mặc định tại `http://127.0.0.1:5000`.
 ### Các Endpoint REST API chính
 - `POST /api/auth/register` — Đăng ký tài khoản mới.
 - `POST /api/auth/login` — Đăng nhập và nhận `access_token` (JWT).
-- `GET /api/scans` — Danh sách phiên quét của người dùng hiện tại (`Authorization: Bearer <token>`).
-- `POST /api/scans` — Khởi tạo phiên quét mới (`url`, `modules`, `max_depth`).
+- `GET /api/targets`, `POST /api/targets` — Khai báo & liệt kê mục tiêu kiểm thử kèm mã xác minh.
+- `POST /api/targets/<id>/verify` — Xác minh quyền sở hữu mục tiêu (`WELL_KNOWN` hoặc `DNS_TXT`).
+- `POST /api/targets/<id>/approve`, `POST /api/targets/<id>/reject` — Phê duyệt / từ chối mục tiêu (`admin`).
+- `GET /api/scans` — Danh sách phiên quét của người dùng hiện tại (hoặc tất cả nếu là `admin`).
+- `POST /api/scans` — Khởi tạo phiên quét mới (`url`, `modules`, `max_depth`, `target_id` tùy chọn).
+- `GET /api/scans/compare?base=<id_a>&target=<id_b>` — So sánh kết quả phát hiện giữa hai phiên quét (`new`, `fixed`, `persistent`).
 - `GET /api/scans/<id>` — Xem trạng thái và tiến độ phiên quét.
-- `GET /api/scans/<id>/findings` — Danh sách lỗ hổng phát hiện được.
+- `GET /api/scans/<id>/findings` — Danh sách lỗ hổng phát hiện được (kèm `source_tool`).
 - `POST /api/scans/<id>/stop` — Yêu cầu hủy phiên quét đang ở trạng thái `PENDING`, `RUNNING`, `CRAWLING`, hoặc `SCANNING`.
-- `GET /api/scans/<id>/report?format=pdf|txt` — Tải báo cáo kỹ thuật của phiên quét.
+- `GET /api/scans/<id>/report?format=pdf|html|json|docx|txt` — Tải báo cáo kỹ thuật của phiên quét.
+- `GET /api/admin/users`, `PATCH /api/admin/users/<id>`, `GET /api/admin/audit-logs` — Quản trị người dùng RBAC & truy vấn nhật ký kiểm toán (`admin`).
 
 ---
 
-## 4. Xuất & Tải báo cáo kỹ thuật TXT/PDF (Module 6.2)
+## 4. Xuất & Tải báo cáo kỹ thuật PDF/HTML/JSON/DOCX/TXT (Module 6.2 & 8.2)
 
 ### 4.1. Qua REST API / Web Dashboard
-- Trên giao diện `/dashboard` hoặc `/scans/<id>`, nhấn nút **TXT** hoặc **PDF** để tải báo cáo về máy.
-- Hoặc gọi trực tiếp qua API với JWT của chủ sở hữu phiên quét:
+- Trên giao diện `/dashboard` hoặc `/scans/<id>`, nhấn nút **TXT**, **HTML**, **JSON**, **DOCX** hoặc **PDF** để tải báo cáo về máy.
+- Hoặc gọi trực tiếp qua API với JWT của chủ sở hữu phiên quét (hoặc `admin`):
   ```bash
   curl -H "Authorization: Bearer <JWT_TOKEN>" \
        "http://127.0.0.1:5000/api/scans/1/report?format=txt" -o scan_1_report.txt
 
   curl -H "Authorization: Bearer <JWT_TOKEN>" \
        "http://127.0.0.1:5000/api/scans/1/report?format=pdf" -o scan_1_report.pdf
+
+  curl -H "Authorization: Bearer <JWT_TOKEN>" \
+       "http://127.0.0.1:5000/api/scans/1/report?format=html" -o scan_1_report.html
+
+  curl -H "Authorization: Bearer <JWT_TOKEN>" \
+       "http://127.0.0.1:5000/api/scans/1/report?format=json" -o scan_1_report.json
   ```
 - **Quy tắc bảo mật & kết xuất báo cáo**:
   - Yêu cầu xác thực JWT (`401` nếu thiếu/hết hạn).
-  - Kiểm tra quyền sở hữu phiên quét: trả `404` nếu phiên không tồn tại hoặc thuộc người dùng khác.
-  - Chỉ chấp nhận định dạng chính xác `format=pdf` hoặc `format=txt` (`400` cho mọi giá trị khác).
+  - Kiểm tra quyền sở hữu phiên quét (hoặc vai trò `admin`): trả `404` nếu phiên không tồn tại hoặc thuộc người dùng khác.
+  - Chỉ chấp nhận định dạng chính xác trong `pdf`, `html`, `json`, `docx`, `txt` (`400` cho mọi giá trị khác). Báo cáo `HTML` tự động escape mọi ký tự đặc biệt và gắn header `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`.
   - Tự động tính toán lại thống kê mức độ nghiêm trọng (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`) trực tiếp từ danh sách findings thực tế để đồng bộ giữa báo cáo TXT và PDF.
   - Hỗ trợ nhúng font TrueType Unicode tiếng Việt qua biến môi trường `REPORT_UNICODE_FONT_PATH` hoặc tự động dò tìm font hệ thống (`Arial`, `Tahoma`, `Segoe UI`, `DejaVuSans`, `LiberationSans`, `NotoSans`). Nếu môi trường tối giản không có bất kỳ font `.ttf` nào, hệ thống ghi chú rõ chế độ fallback `Helvetica (ASCII transliteration fallback)` và chuyển đổi dấu tiếng Việt sang ASCII rõ nghĩa thay vì hiển thị ký tự lỗi.
   - Làm sạch ký tự điều khiển XML không hợp lệ và escape đầy đủ `<`, `>`, `&`, `'`, `"` trước khi đưa vào `Paragraph` của ReportLab.
@@ -182,20 +196,21 @@ pytest -v
 
 ## 7. Cấu hình triển khai & Giới hạn kiến trúc
 
-### 1. Chính sách mục tiêu Loopback-Only thống nhất (`core/security/`)
+### 1. Chính sách phạm vi mục tiêu thống nhất (`core/security/`)
 - Mọi URL đầu vào qua API (`schemas/requested_scope_schema.py`), CLI (`scanner.py`), Engine (`core/engine/scan_engine.py`), Crawler (`core/crawler/bfs_crawler.py`), Scanner (`core/scanners/base_scanner.py`) và HTTP Client (`core/utils/safe_http_client.py`) đều được kiểm tra qua `validate_target_url`:
-  - Chỉ cho phép scheme `http` hoặc `https`.
-  - Không cho phép thông tin xác thực nhúng trong URL (`user:pass@host`).
-  - Hostname chỉ được phép là `localhost`, `*.localhost`, hoặc địa chỉ IP loopback `127.0.0.0/8` và `::1`.
-  - Phân giải DNS (`core/security/dns_resolver.py`) và xác minh mọi IP trả về đều là loopback để chống tấn công DNS Rebinding.
-  - Kiểm tra thủ công từng bước HTTP Redirect (`301`, `302`, `303`, `307`, `308`, tối đa 3 bước) và chặn ngay nếu `Location` trỏ ra ngoài loopback.
+  - Chỉ cho phép scheme `http` hoặc `https`, không cho phép thông tin xác thực nhúng trong URL (`user:pass@host`).
+  - Hostname chỉ được phép thuộc `localhost`, `*.localhost`, IP loopback (`127.0.0.0/8`, `::1`) hoặc các domain được khai báo trong `AUTHORIZED_TARGET_DOMAINS` (ví dụ `okiaconpet.cloud`).
+  - Phân giải DNS (`core/security/dns_resolver.py`) và ghim kết nối (`core/security/connection_pinning.py`), chặn tuyệt đối các dải IP LAN/private, link-local/cloud metadata để chống SSRF & DNS Rebinding.
+  - Tự động loại trừ `/api/` và `/scans/` khi tự quét chính `APP_BASE_URL` (Self-Scan Guard) và kiểm tra thủ công từng bước HTTP Redirect.
 
-### 2. Môi trường Production & Biến môi trường bảo mật
-- Khi `APP_ENV=production`, ứng dụng bắt buộc cấu hình `SECRET_KEY` và `JWT_SECRET_KEY` có độ dài tối thiểu **32 ký tự** và không trùng giá trị mặc định của môi trường development. Nếu thiếu hoặc yếu, `create_app()` sẽ ném `RuntimeError` và dừng khởi động.
+### 2. Môi trường Production, Docker Compose & Cloudflare Tunnel
+- Khi `APP_ENV=production`, ứng dụng bắt buộc cấu hình `SECRET_KEY` và `JWT_SECRET_KEY` tối thiểu **32 ký tự** (khác mặc định).
+- `init_db()` và `python -m migrations.env` tự động khởi tạo bảng và bổ sung các cột mới còn thiếu cho cả **SQLite** lẫn **PostgreSQL**.
+- Xem hướng dẫn đóng gói `Dockerfile`, `docker-compose.yml` và cấu hình **Cloudflare Tunnel (`cloudflared`)** cho `https://okiaconpet.cloud` tại [`Docs/DEPLOY_CLOUDFLARE_TUNNEL.md`](Docs/DEPLOY_CLOUDFLARE_TUNNEL.md).
 
 ### 3. Rate Limiter & Reverse Proxy (`TRUSTED_PROXIES`)
-- Mặc định `TRUSTED_PROXIES` để trống: rate limiter luôn dùng `request.remote_addr` và **bỏ qua** `X-Forwarded-For` để ngăn client trực tiếp giả mạo IP.
-- Chỉ khi triển khai phía sau reverse proxy tin cậy mới cấu hình danh sách IP hoặc CIDR của proxy qua biến môi trường `TRUSTED_PROXIES` (ví dụ: `TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8`).
+- Mặc định `TRUSTED_PROXIES` để trống: hệ thống luôn dùng `request.remote_addr` và **bỏ qua** `CF-Connecting-IP` / `X-Forwarded-For` / `X-Forwarded-Host` để ngăn client trực tiếp giả mạo IP hoặc host.
+- Khi đứng sau Cloudflare Tunnel / Reverse Proxy tin cậy, khai báo CIDR của proxy trong `TRUSTED_PROXIES` để ưu tiên trích xuất IP client từ `CF-Connecting-IP` rồi tới `X-Forwarded-For`.
 
 ### 4. Kiến trúc Hàng đợi Nền Single-Process (`WORKER_PROCESSES=1`)
 - Dự án sử dụng kiến trúc hàng đợi nền trong bộ nhớ (`queue.Queue` + daemon worker thread trong `services/scan_service.py`) kết hợp cơ chế khôi phục phiên quét từ SQLite (`recover_pending_scans`) và `threading.Event` riêng cho từng phiên quét để xử lý tín hiệu dừng (`POST /api/scans/<id>/stop`).
