@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Generator
 
-from sqlalchemy import DateTime, create_engine
+from sqlalchemy import DateTime, create_engine, inspect, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -93,13 +93,47 @@ def get_db_session() -> Generator[Session, None, None]:
         session.close()
 
 
+def _ensure_sqlite_columns(engine: Engine) -> None:
+    """
+    Bổ sung các cột mới vào cơ sở dữ liệu SQLite hiện có nếu chưa tồn tại
+    (giúp tương thích ngược với tệp scannerweb.db cục bộ mà không làm mất dữ liệu).
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    expected_columns: dict[str, list[tuple[str, str]]] = {
+        "scan_targets": [
+            ("owner_id", "INTEGER"),
+            ("scope", "JSON"),
+            ("authorization_status", "VARCHAR(32) NOT NULL DEFAULT 'PENDING'"),
+            ("verification_token", "VARCHAR(128)"),
+            ("verification_method", "VARCHAR(32)"),
+        ],
+        "vulnerability_findings": [
+            ("source_tool", "VARCHAR(64) DEFAULT 'owasp_scanner'"),
+        ],
+    }
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for table_name, columns in expected_columns.items():
+            if table_name not in existing_tables:
+                continue
+            present = {col["name"] for col in inspector.get_columns(table_name)}
+            for col_name, col_ddl in columns:
+                if col_name not in present:
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_ddl}"))
+
+
 def init_db(database_uri: str | None = None) -> Engine:
     """Khởi tạo toàn bộ bảng CSDL từ ORM Metadata."""
     # Import đầy đủ các models để đăng ký vào Base.metadata
+    import models.audit_log  # noqa: F401
+    import models.report  # noqa: F401
     import models.scan_job  # noqa: F401
     import models.user  # noqa: F401
     import models.vulnerability  # noqa: F401
 
     engine = get_engine(database_uri)
     Base.metadata.create_all(bind=engine)
+    _ensure_sqlite_columns(engine)
     return engine

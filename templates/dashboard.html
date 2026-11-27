@@ -213,6 +213,152 @@
         </div>
       </div>
     </div>
+
+    <!-- Hàng: Quản lý Mục tiêu (Targets) & So sánh Lịch sử Quét (Scan Diffing) -->
+    <div class="row g-4 mt-1">
+      <div class="col-lg-7">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">Quản lý Mục tiêu &amp; Xác minh Quyền sở hữu (Targets)</span>
+            <button type="button" id="refreshTargetsBtn" class="btn btn-outline-light btn-sm">Làm mới</button>
+          </div>
+          <div class="card-body">
+            <div id="targetAlert" class="alert d-none" role="alert"></div>
+            <form id="newTargetForm" class="row g-2 mb-3" novalidate>
+              <div class="col-md-4">
+                <input type="text" id="targetNameInput" class="form-control form-control-sm" placeholder="Tên mục tiêu (vd: Lab App)">
+              </div>
+              <div class="col-md-5">
+                <input type="url" id="targetUrlInput" class="form-control form-control-sm" placeholder="http://127.0.0.1:8080" required>
+              </div>
+              <div class="col-md-3 d-grid">
+                <button type="submit" id="createTargetBtn" class="btn btn-sm btn-success">Thêm Target</button>
+              </div>
+            </form>
+            <div class="small text-muted mb-2">
+              Xác minh bằng cách đặt mã token vào tệp <code>/.well-known/pentest-verify.txt</code> trên mục tiêu hoặc chờ Admin phê duyệt.
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover align-middle mb-0" id="targetsTable">
+                <thead class="table-light">
+                  <tr>
+                    <th>ID</th>
+                    <th>Mục tiêu</th>
+                    <th>Trạng thái</th>
+                    <th>Token xác minh</th>
+                    <th class="text-end">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody id="targetsTableBody">
+                  <tr>
+                    <td colspan="5" class="text-center text-muted py-3">Chưa có mục tiêu nào được khai báo.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-5">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-dark text-white fw-semibold">
+            So sánh Lịch sử giữa 2 Phiên quét (Scan Diffing)
+          </div>
+          <div class="card-body">
+            <div id="compareAlert" class="alert d-none" role="alert"></div>
+            <form id="compareScansForm" class="row g-2 mb-3" novalidate>
+              <div class="col-6">
+                <label for="compareBaseSelect" class="form-label small fw-semibold mb-1">Phiên gốc (Base)</label>
+                <select id="compareBaseSelect" class="form-select form-select-sm"></select>
+              </div>
+              <div class="col-6">
+                <label for="compareTargetSelect" class="form-label small fw-semibold mb-1">Phiên mới (Target)</label>
+                <select id="compareTargetSelect" class="form-select form-select-sm"></select>
+              </div>
+              <div class="col-12 d-grid mt-2">
+                <button type="submit" id="compareScansBtn" class="btn btn-sm btn-primary">So sánh kết quả (Diff)</button>
+              </div>
+            </form>
+            <div id="compareSummaryBox" class="d-none">
+              <div class="d-flex justify-content-between text-center gap-2 mb-3">
+                <div class="border rounded p-2 flex-fill">
+                  <div class="small text-muted">Mới phát sinh</div>
+                  <strong id="diffNewCount" class="text-danger fs-5">0</strong>
+                </div>
+                <div class="border rounded p-2 flex-fill">
+                  <div class="small text-muted">Đã khắc phục</div>
+                  <strong id="diffFixedCount" class="text-success fs-5">0</strong>
+                </div>
+                <div class="border rounded p-2 flex-fill">
+                  <div class="small text-muted">Còn tồn tại</div>
+                  <strong id="diffPersistentCount" class="text-secondary fs-5">0</strong>
+                </div>
+              </div>
+              <div class="table-responsive" style="max-height: 220px;">
+                <table class="table table-sm align-middle mb-0">
+                  <thead class="table-light">
+                    <tr>
+                      <th>Phân nhóm</th>
+                      <th>Mức độ</th>
+                      <th>Lỗ hổng &amp; URL</th>
+                    </tr>
+                  </thead>
+                  <tbody id="compareResultsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Khu vực Quản trị Hệ thống & Audit Logs (Chỉ hiển thị cho Administrator) -->
+    <div id="adminPanelSection" class="card shadow-sm mt-4 d-none">
+      <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <span class="fw-semibold">Quản trị Hệ thống (RBAC Users &amp; Audit Logs — Admin Only)</span>
+        <button type="button" id="refreshAdminBtn" class="btn btn-outline-light btn-sm">Làm mới Admin</button>
+      </div>
+      <div class="card-body">
+        <div id="adminAlert" class="alert d-none" role="alert"></div>
+        <div class="row g-4">
+          <div class="col-lg-5">
+            <h6 class="fw-bold mb-2">Tài khoản Người dùng</h6>
+            <div class="table-responsive" style="max-height: 260px;">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>ID</th>
+                    <th>User</th>
+                    <th>Vai trò</th>
+                    <th>Trạng thái</th>
+                    <th class="text-end">Đổi quyền</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="col-lg-7">
+            <h6 class="fw-bold mb-2">Nhật ký Kiểm toán Gần nhất (Audit Logs)</h6>
+            <div class="table-responsive" style="max-height: 260px;">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Thời gian</th>
+                    <th>User ID</th>
+                    <th>Hành động</th>
+                    <th>Tài nguyên</th>
+                    <th>IP</th>
+                  </tr>
+                </thead>
+                <tbody id="adminAuditLogsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </div>
 {% endblock %}

@@ -117,6 +117,20 @@ def validate_single_process_config(worker_processes: int | str | None = 1) -> No
         )
 
 
+def parse_bool_env(raw: Any, default: bool = False) -> bool:
+    """Chuyển đổi giá trị biến môi trường dạng chuỗi/bool sang kiểu bool chuẩn."""
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return default
+    val = str(raw).strip().lower()
+    if val in {"1", "true", "yes", "on"}:
+        return True
+    if val in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
 class Config:
     """Cấu hình cơ sở dùng chung cho toàn hệ thống."""
 
@@ -125,8 +139,16 @@ class Config:
     SECRET_KEY: str = os.getenv("SECRET_KEY", DEFAULT_SECRET_KEY)
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", DEFAULT_JWT_SECRET_KEY)
 
-    # Rate limiter: chỉ tin X-Forwarded-For khi remote_addr thuộc danh sách TRUSTED_PROXIES.
-    # Mặc định rỗng: không tin tưởng header X-Forwarded-For từ bất kỳ nguồn nào.
+    # URL công khai của chính nền tảng (phục vụ Cloudflare Tunnel & chống tự quét /api/, /scans/)
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "https://okiaconpet.cloud").strip()
+
+    # Yêu cầu xác minh/phê duyệt ScanTarget trước khi cho phép tạo phiên quét
+    TARGET_VERIFICATION_REQUIRED: bool = parse_bool_env(
+        os.getenv("TARGET_VERIFICATION_REQUIRED"), default=False
+    )
+
+    # Rate limiter: chỉ tin CF-Connecting-IP / X-Forwarded-For khi remote_addr thuộc TRUSTED_PROXIES.
+    # Mặc định rỗng: không tin tưởng header chuyển tiếp từ bất kỳ nguồn nào.
     TRUSTED_PROXIES: tuple[str, ...] = parse_trusted_proxies(os.getenv("TRUSTED_PROXIES", ""))
     TRUSTED_PROXY: bool = False
 

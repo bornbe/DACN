@@ -9,7 +9,8 @@ from flask.typing import ResponseReturnValue
 from sqlalchemy.orm import Session, sessionmaker
 
 from middleware.auth_middleware import require_auth
-from services import report_service, scan_service
+from models.report import Report
+from services import audit_service, report_service, scan_service
 
 report_blueprint = Blueprint("reports", __name__)
 
@@ -46,18 +47,36 @@ def download_scan_report(session_id: int) -> ResponseReturnValue:
         return (
             jsonify(
                 error="Bad Request",
-                message="Tham số format không hợp lệ; chỉ hỗ trợ 'pdf', 'docx' hoặc 'txt'.",
+                message="Tham số format không hợp lệ; chỉ hỗ trợ 'pdf', 'html', 'json', 'docx' hoặc 'txt'.",
             ),
             400,
         )
 
+    owner_filter = None if g.user.is_admin else g.user.id
     with _session_factory()() as db:
-        scan = scan_service.get_scan(db, session_id, g.user.id)
+        scan = scan_service.get_scan(db, session_id, owner_filter)
         if scan is None:
             return jsonify(error="Not Found", message="Không tìm thấy phiên quét."), 404
-        findings = scan_service.list_findings(db, session_id, g.user.id)
+        findings = scan_service.list_findings(db, session_id, owner_filter)
         endpoints = list(scan.endpoints or [])
         report_data = report_service.build_session_report(scan, findings=findings, endpoints=endpoints)
+
+        report_record = Report(
+            session_id=session_id,
+            user_id=g.user.id,
+            report_format=fmt,
+            file_path=f"scan-report-{session_id}.{fmt}",
+        )
+        db.add(report_record)
+        audit_service.record_audit_log(
+            db,
+            action="REPORT_EXPORT",
+            user_id=g.user.id,
+            resource_type="scan",
+            resource_id=session_id,
+            metadata={"format": fmt},
+            commit=True,
+        )
 
     headers = {
         "Content-Disposition": f'attachment; filename="scan-report-{session_id}.{fmt}"',
@@ -68,6 +87,17 @@ def download_scan_report(session_id: int) -> ResponseReturnValue:
     if fmt == "txt":
         content = report_service.render_text(report_data)
         return Response(content, status=200, mimetype="text/plain; charset=utf-8", headers=headers)
+
+    if fmt == "json":
+        json_bytes = report_service.render_json_bytes(report_data)
+        return Response(json_bytes, status=200, mimetype="application/json; charset=utf-8", headers=headers)
+
+    if fmt == "html":
+        # Gắn CSP chặt chẽ cho file HTML tải về để chặn thực thi mọi script nội tuyến
+        html_headers = dict(headers)
+        html_headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+        html_bytes = report_service.render_html_bytes(report_data)
+        return Response(html_bytes, status=200, mimetype="text/html; charset=utf-8", headers=html_headers)
 
     if fmt == "docx":
         try:

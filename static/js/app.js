@@ -139,10 +139,16 @@
     return global.fetch(path, opts);
   }
 
+  const ALLOWED_REPORT_FORMATS = new Set(["txt", "pdf", "docx", "html", "json"]);
+
   async function downloadReportFile(sessionId, format, alertElementId) {
     const fmt = String(format || "").toLowerCase();
-    if (fmt !== "txt" && fmt !== "pdf") {
-      showAlert(alertElementId || "globalAlertBox", "Định dạng báo cáo chỉ hỗ trợ TXT hoặc PDF.", "warning");
+    if (!ALLOWED_REPORT_FORMATS.has(fmt)) {
+      showAlert(
+        alertElementId || "globalAlertBox",
+        "Định dạng báo cáo chỉ hỗ trợ TXT, PDF, HTML, JSON hoặc DOCX.",
+        "warning"
+      );
       return;
     }
     try {
@@ -396,6 +402,24 @@
       });
       btnGroup.appendChild(txtBtn);
 
+      const htmlBtn = document.createElement("button");
+      htmlBtn.type = "button";
+      htmlBtn.className = "btn btn-outline-success";
+      htmlBtn.textContent = "HTML";
+      htmlBtn.addEventListener("click", function () {
+        downloadReportFile(scan.id, "html", "scanFormAlert");
+      });
+      btnGroup.appendChild(htmlBtn);
+
+      const jsonBtn = document.createElement("button");
+      jsonBtn.type = "button";
+      jsonBtn.className = "btn btn-outline-info";
+      jsonBtn.textContent = "JSON";
+      jsonBtn.addEventListener("click", function () {
+        downloadReportFile(scan.id, "json", "scanFormAlert");
+      });
+      btnGroup.appendChild(jsonBtn);
+
       const pdfBtn = document.createElement("button");
       pdfBtn.type = "button";
       pdfBtn.className = "btn btn-outline-dark";
@@ -435,6 +459,7 @@
       const scans = Array.isArray(data.scans) ? data.scans : [];
       renderDashboardStatsAndChart(scans);
       renderScansTable(scans);
+      populateCompareSelectors(scans);
 
       const hasActive = scans.some(function (s) {
         return ACTIVE_STATUSES.has(String(s.status || "").toUpperCase());
@@ -502,6 +527,8 @@
           setSession(body.access_token, body.user);
           loginForm.reset();
           await loadDashboardScans();
+          await loadDashboardTargets();
+          await loadAdminPanelIfAuthorized();
         } catch (_err) {
           showAlert("authAlert", "Không thể kết nối tới API đăng nhập.", "danger");
         } finally {
@@ -617,7 +644,395 @@
       });
     }
 
+    initTargetAndCompareAndAdminControls();
     loadDashboardScans();
+    if (getToken()) {
+      loadDashboardTargets();
+      loadAdminPanelIfAuthorized();
+    }
+  }
+
+  function populateCompareSelectors(scans) {
+    const baseSel = document.getElementById("compareBaseSelect");
+    const targetSel = document.getElementById("compareTargetSelect");
+    if (!baseSel || !targetSel) {
+      return;
+    }
+    const prevBase = baseSel.value;
+    const prevTarget = targetSel.value;
+    baseSel.textContent = "";
+    targetSel.textContent = "";
+
+    const list = Array.isArray(scans) ? scans : [];
+    list.forEach(function (scan) {
+      const label = "#" + scan.id + " - " + (scan.target_url || "-") + " (" + (scan.status || "-") + ")";
+      const optA = document.createElement("option");
+      optA.value = String(scan.id);
+      optA.textContent = label;
+      baseSel.appendChild(optA);
+
+      const optB = document.createElement("option");
+      optB.value = String(scan.id);
+      optB.textContent = label;
+      targetSel.appendChild(optB);
+    });
+
+    if (prevBase) {
+      baseSel.value = prevBase;
+    } else if (list.length >= 2) {
+      baseSel.value = String(list[1].id);
+    }
+    if (prevTarget) {
+      targetSel.value = prevTarget;
+    } else if (list.length >= 1) {
+      targetSel.value = String(list[0].id);
+    }
+  }
+
+  async function loadDashboardTargets() {
+    const tbody = document.getElementById("targetsTableBody");
+    if (!tbody || !getToken()) {
+      return;
+    }
+    try {
+      const resp = await apiFetch("/api/targets", { method: "GET" });
+      if (!resp.ok) {
+        return;
+      }
+      const data = await resp.json();
+      const targets = Array.isArray(data.targets) ? data.targets : [];
+      tbody.textContent = "";
+      if (targets.length === 0) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 5;
+        td.className = "text-center text-muted py-3";
+        td.textContent = "Chưa có mục tiêu nào được khai báo.";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      const currentUser = getStoredUser();
+      const isAdmin = Boolean(currentUser && String(currentUser.role || "").toLowerCase() === "admin");
+
+      targets.forEach(function (t) {
+        const tr = document.createElement("tr");
+
+        const tdId = document.createElement("td");
+        tdId.textContent = "#" + t.id;
+        tr.appendChild(tdId);
+
+        const tdInfo = document.createElement("td");
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "fw-semibold small";
+        nameDiv.textContent = t.name || "-";
+        const urlCode = document.createElement("code");
+        urlCode.className = "small";
+        urlCode.textContent = t.url || "-";
+        tdInfo.appendChild(nameDiv);
+        tdInfo.appendChild(urlCode);
+        tr.appendChild(tdInfo);
+
+        const tdStatus = document.createElement("td");
+        const stBadge = document.createElement("span");
+        const st = String(t.authorization_status || "PENDING").toUpperCase();
+        stBadge.className =
+          "badge " +
+          (st === "VERIFIED" || st === "APPROVED"
+            ? "bg-success"
+            : st === "REJECTED"
+              ? "bg-danger"
+              : "bg-warning text-dark");
+        stBadge.textContent = st;
+        tdStatus.appendChild(stBadge);
+        tr.appendChild(tdStatus);
+
+        const tdToken = document.createElement("td");
+        const tokCode = document.createElement("code");
+        tokCode.className = "small";
+        tokCode.textContent = t.verification_token || "-";
+        tdToken.appendChild(tokCode);
+        tr.appendChild(tdToken);
+
+        const tdAct = document.createElement("td");
+        tdAct.className = "text-end";
+        const grp = document.createElement("div");
+        grp.className = "btn-group btn-group-sm";
+
+        const useBtn = document.createElement("button");
+        useBtn.type = "button";
+        useBtn.className = "btn btn-outline-primary";
+        useBtn.textContent = "Quét";
+        useBtn.addEventListener("click", function () {
+          const urlInput = document.getElementById("scanUrlInput");
+          if (urlInput) {
+            urlInput.value = t.url || "";
+            urlInput.focus();
+          }
+        });
+        grp.appendChild(useBtn);
+
+        const verifyBtn = document.createElement("button");
+        verifyBtn.type = "button";
+        verifyBtn.className = "btn btn-outline-success";
+        verifyBtn.textContent = "Verify";
+        verifyBtn.addEventListener("click", async function () {
+          hideAlert("targetAlert");
+          const vResp = await apiFetch("/api/targets/" + encodeURIComponent(t.id) + "/verify", {
+            method: "POST",
+            body: { method: "WELL_KNOWN" },
+          });
+          const vBody = await vResp.json();
+          if (!vResp.ok) {
+            showAlert("targetAlert", (vBody && vBody.message) || "Xác minh thất bại.", "warning");
+          } else {
+            showAlert("targetAlert", "Đã xác minh quyền sở hữu mục tiêu #" + t.id + ".", "success");
+            await loadDashboardTargets();
+          }
+        });
+        grp.appendChild(verifyBtn);
+
+        if (isAdmin) {
+          const appBtn = document.createElement("button");
+          appBtn.type = "button";
+          appBtn.className = "btn btn-outline-dark";
+          appBtn.textContent = "Duyệt";
+          appBtn.addEventListener("click", async function () {
+            const aResp = await apiFetch("/api/targets/" + encodeURIComponent(t.id) + "/approve", {
+              method: "POST",
+            });
+            if (aResp.ok) {
+              showAlert("targetAlert", "Đã phê duyệt mục tiêu #" + t.id + ".", "success");
+              await loadDashboardTargets();
+            }
+          });
+          grp.appendChild(appBtn);
+        }
+
+        tdAct.appendChild(grp);
+        tr.appendChild(tdAct);
+        tbody.appendChild(tr);
+      });
+    } catch (_err) {
+      // Giữ trạng thái hiện tại nếu lỗi mạng tạm thời
+    }
+  }
+
+  async function loadAdminPanelIfAuthorized() {
+    const panel = document.getElementById("adminPanelSection");
+    const user = getStoredUser();
+    if (!panel) {
+      return;
+    }
+    if (!getToken() || !user || String(user.role || "").toLowerCase() !== "admin") {
+      panel.classList.add("d-none");
+      return;
+    }
+    panel.classList.remove("d-none");
+    try {
+      const [uResp, lResp] = await Promise.all([
+        apiFetch("/api/admin/users", { method: "GET" }),
+        apiFetch("/api/admin/audit-logs?limit=30", { method: "GET" }),
+      ]);
+      if (uResp.ok) {
+        const uData = await uResp.json();
+        const uBody = document.getElementById("adminUsersBody");
+        if (uBody) {
+          uBody.textContent = "";
+          (uData.users || []).forEach(function (u) {
+            const tr = document.createElement("tr");
+            const tdId = document.createElement("td");
+            tdId.textContent = "#" + u.id;
+            const tdName = document.createElement("td");
+            tdName.textContent = u.username;
+            const tdRole = document.createElement("td");
+            tdRole.textContent = u.role;
+            const tdActState = document.createElement("td");
+            tdActState.textContent = u.is_active ? "Active" : "Locked";
+            const tdBtn = document.createElement("td");
+            tdBtn.className = "text-end";
+            if (u.id !== user.id) {
+              const roleBtn = document.createElement("button");
+              roleBtn.type = "button";
+              roleBtn.className = "btn btn-sm btn-outline-secondary";
+              const nextRole = u.role === "admin" ? "tester" : "admin";
+              roleBtn.textContent = "-> " + nextRole;
+              roleBtn.addEventListener("click", async function () {
+                const r = await apiFetch("/api/admin/users/" + encodeURIComponent(u.id), {
+                  method: "PATCH",
+                  body: { role: nextRole },
+                });
+                if (r.ok) {
+                  await loadAdminPanelIfAuthorized();
+                }
+              });
+              tdBtn.appendChild(roleBtn);
+            }
+            tr.appendChild(tdId);
+            tr.appendChild(tdName);
+            tr.appendChild(tdRole);
+            tr.appendChild(tdActState);
+            tr.appendChild(tdBtn);
+            uBody.appendChild(tr);
+          });
+        }
+      }
+      if (lResp.ok) {
+        const lData = await lResp.json();
+        const lBody = document.getElementById("adminAuditLogsBody");
+        if (lBody) {
+          lBody.textContent = "";
+          (lData.audit_logs || []).forEach(function (entry) {
+            const tr = document.createElement("tr");
+            const tdTime = document.createElement("td");
+            tdTime.className = "small text-muted";
+            tdTime.textContent = formatDateTime(entry.created_at);
+            const tdUid = document.createElement("td");
+            tdUid.textContent = entry.user_id !== null && entry.user_id !== undefined ? "#" + entry.user_id : "-";
+            const tdAction = document.createElement("td");
+            const codeAct = document.createElement("code");
+            codeAct.textContent = entry.action || "-";
+            tdAction.appendChild(codeAct);
+            const tdRes = document.createElement("td");
+            tdRes.className = "small";
+            tdRes.textContent = (entry.resource_type || "-") + (entry.resource_id ? " #" + entry.resource_id : "");
+            const tdIp = document.createElement("td");
+            tdIp.className = "small text-muted";
+            tdIp.textContent = entry.ip_address || "-";
+            tr.appendChild(tdTime);
+            tr.appendChild(tdUid);
+            tr.appendChild(tdAction);
+            tr.appendChild(tdRes);
+            tr.appendChild(tdIp);
+            lBody.appendChild(tr);
+          });
+        }
+      }
+    } catch (_err) {
+      // Bỏ qua lỗi mạng tạm thời
+    }
+  }
+
+  function initTargetAndCompareAndAdminControls() {
+    const newTargetForm = document.getElementById("newTargetForm");
+    const refreshTargetsBtn = document.getElementById("refreshTargetsBtn");
+    const compareForm = document.getElementById("compareScansForm");
+    const refreshAdminBtn = document.getElementById("refreshAdminBtn");
+
+    if (newTargetForm) {
+      newTargetForm.addEventListener("submit", async function (evt) {
+        evt.preventDefault();
+        hideAlert("targetAlert");
+        const nameEl = document.getElementById("targetNameInput");
+        const urlEl = document.getElementById("targetUrlInput");
+        const urlVal = urlEl ? urlEl.value.trim() : "";
+        const nameVal = nameEl ? nameEl.value.trim() : "";
+        if (!urlVal) {
+          showAlert("targetAlert", "Vui lòng nhập URL mục tiêu.", "warning");
+          return;
+        }
+        const resp = await apiFetch("/api/targets", {
+          method: "POST",
+          body: { name: nameVal || undefined, url: urlVal },
+        });
+        const body = await resp.json();
+        if (!resp.ok) {
+          showAlert("targetAlert", (body && body.message) || "Không thể tạo mục tiêu.", "danger");
+          return;
+        }
+        newTargetForm.reset();
+        showAlert("targetAlert", "Đã thêm mục tiêu #" + body.target.id + ".", "success");
+        await loadDashboardTargets();
+      });
+    }
+
+    if (refreshTargetsBtn) {
+      refreshTargetsBtn.addEventListener("click", function () {
+        loadDashboardTargets();
+      });
+    }
+
+    if (compareForm) {
+      compareForm.addEventListener("submit", async function (evt) {
+        evt.preventDefault();
+        hideAlert("compareAlert");
+        const baseSel = document.getElementById("compareBaseSelect");
+        const targetSel = document.getElementById("compareTargetSelect");
+        const baseId = baseSel ? baseSel.value : "";
+        const targetId = targetSel ? targetSel.value : "";
+        if (!baseId || !targetId) {
+          showAlert("compareAlert", "Cần ít nhất hai phiên quét để so sánh.", "warning");
+          return;
+        }
+        const resp = await apiFetch(
+          "/api/scans/compare?base=" + encodeURIComponent(baseId) + "&target=" + encodeURIComponent(targetId),
+          { method: "GET" }
+        );
+        const data = await resp.json();
+        if (!resp.ok) {
+          showAlert("compareAlert", (data && data.message) || "Không thể so sánh hai phiên quét.", "danger");
+          return;
+        }
+        const comp = data.comparison || {};
+        const sum = comp.summary || {};
+        const box = document.getElementById("compareSummaryBox");
+        if (box) {
+          box.classList.remove("d-none");
+        }
+        const setTxt = function (id, v) {
+          const el = document.getElementById(id);
+          if (el) {
+            el.textContent = String(v);
+          }
+        };
+        setTxt("diffNewCount", sum.new_count || 0);
+        setTxt("diffFixedCount", sum.fixed_count || 0);
+        setTxt("diffPersistentCount", sum.persistent_count || 0);
+
+        const tbody = document.getElementById("compareResultsBody");
+        if (tbody) {
+          tbody.textContent = "";
+          const appendGroup = function (items, label, badgeClass) {
+            (items || []).forEach(function (f) {
+              const tr = document.createElement("tr");
+              const tdGrp = document.createElement("td");
+              const b = document.createElement("span");
+              b.className = "badge " + badgeClass;
+              b.textContent = label;
+              tdGrp.appendChild(b);
+
+              const tdSev = document.createElement("td");
+              tdSev.appendChild(createSeverityBadge(f.severity));
+
+              const tdDesc = document.createElement("td");
+              const titleDiv = document.createElement("div");
+              titleDiv.className = "small fw-semibold";
+              titleDiv.textContent = f.vuln_type || "-";
+              const urlSmall = document.createElement("code");
+              urlSmall.className = "small";
+              urlSmall.textContent = f.target_url || "-";
+              tdDesc.appendChild(titleDiv);
+              tdDesc.appendChild(urlSmall);
+
+              tr.appendChild(tdGrp);
+              tr.appendChild(tdSev);
+              tr.appendChild(tdDesc);
+              tbody.appendChild(tr);
+            });
+          };
+          appendGroup(comp.new_findings, "NEW", "bg-danger");
+          appendGroup(comp.fixed_findings, "FIXED", "bg-success");
+          appendGroup(comp.persistent_findings, "PERSIST", "bg-secondary");
+        }
+      });
+    }
+
+    if (refreshAdminBtn) {
+      refreshAdminBtn.addEventListener("click", function () {
+        loadAdminPanelIfAuthorized();
+      });
+    }
   }
 
   /* ======================================================================
@@ -958,6 +1373,8 @@
 
     const stopBtn = document.getElementById("stopScanBtn");
     const txtBtn = document.getElementById("downloadTxtBtn");
+    const htmlBtn = document.getElementById("downloadHtmlBtn");
+    const jsonBtn = document.getElementById("downloadJsonBtn");
     const docxBtn = document.getElementById("downloadDocxBtn");
     const pdfBtn = document.getElementById("downloadPdfBtn");
     const closeModalBtn = document.getElementById("closeFindingModalBtn");
@@ -1017,6 +1434,18 @@
     if (txtBtn) {
       txtBtn.addEventListener("click", function () {
         downloadReportFile(sessionId, "txt", "detailAlert");
+      });
+    }
+
+    if (htmlBtn) {
+      htmlBtn.addEventListener("click", function () {
+        downloadReportFile(sessionId, "html", "detailAlert");
+      });
+    }
+
+    if (jsonBtn) {
+      jsonBtn.addEventListener("click", function () {
+        downloadReportFile(sessionId, "json", "detailAlert");
       });
     }
 

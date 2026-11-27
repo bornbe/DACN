@@ -72,6 +72,62 @@ def _extract_forwarded_ip(
     return valid_hops[0]
 
 
+def _extract_cf_connecting_ip(
+    cf_header: str,
+    trusted_networks: tuple[IPNetwork, ...],
+) -> str | None:
+    """
+    Trích xuất IP thật của người dùng từ header `CF-Connecting-IP` do Cloudflare Tunnel gắn vào.
+    Chỉ chấp nhận chuỗi IP đơn lẻ hợp lệ và không nằm trong dải trusted proxy nội bộ.
+    """
+    candidate = (cf_header or "").strip()
+    if not candidate or "," in candidate:
+        return None
+    try:
+        ip_obj = ipaddress.ip_address(candidate)
+    except ValueError:
+        return None
+    normalized = str(ip_obj)
+    if _is_trusted_proxy(normalized, trusted_networks):
+        return None
+    return normalized
+
+
+def resolve_client_ip(trusted_proxies: Any = None) -> str:
+    """
+    Xác định IP thực của client phục vụ Rate Limiter và Audit Logging:
+    - Chỉ đọc `CF-Connecting-IP` (ưu tiên 1) hoặc `X-Forwarded-For` (ưu tiên 2) khi
+      `request.remote_addr` nằm trong allowlist `TRUSTED_PROXIES`.
+    - Nếu không có trusted proxy hoặc `remote_addr` không thuộc allowlist, luôn dùng `request.remote_addr`.
+    """
+    from flask import current_app
+
+    raw_proxies = (
+        trusted_proxies
+        if trusted_proxies is not None
+        else (current_app.config.get("TRUSTED_PROXIES") if current_app else ())
+    )
+    trusted_networks = (
+        raw_proxies
+        if isinstance(raw_proxies, tuple)
+        and all(isinstance(n, (ipaddress.IPv4Network, ipaddress.IPv6Network)) for n in raw_proxies)
+        else _compile_trusted_networks(raw_proxies)
+    )
+    remote_addr = (request.remote_addr or "").strip()
+    if _is_trusted_proxy(remote_addr, trusted_networks):
+        cf_ip = _extract_cf_connecting_ip(
+            request.headers.get("CF-Connecting-IP", ""),
+            trusted_networks,
+        )
+        if cf_ip:
+            return cf_ip
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        forwarded_ip = _extract_forwarded_ip(forwarded, trusted_networks)
+        if forwarded_ip:
+            return forwarded_ip
+    return remote_addr or "unknown"
+
+
 def init_rate_limiter(
     app: Flask,
     limit: int = 60,
@@ -88,22 +144,11 @@ def init_rate_limiter(
     if app.config.get("TRUSTED_PROXY") and not trusted_networks:
         app.logger.warning(
             "TRUSTED_PROXY được bật nhưng TRUSTED_PROXIES trống; "
-            "bỏ qua X-Forwarded-For để tránh giả mạo IP từ client trực tiếp."
+            "bỏ qua CF-Connecting-IP / X-Forwarded-For để tránh giả mạo IP từ client trực tiếp."
         )
 
     def _client_ip() -> str:
-        """
-        Xác định IP của client để áp dụng rate limit:
-        - Chỉ đọc X-Forwarded-For khi `request.remote_addr` nằm trong allowlist `TRUSTED_PROXIES`.
-        - Nếu không có trusted proxy hoặc `remote_addr` không thuộc allowlist, luôn dùng `request.remote_addr`.
-        """
-        remote_addr = (request.remote_addr or "").strip()
-        if _is_trusted_proxy(remote_addr, trusted_networks):
-            forwarded = request.headers.get("X-Forwarded-For", "")
-            forwarded_ip = _extract_forwarded_ip(forwarded, trusted_networks)
-            if forwarded_ip:
-                return forwarded_ip
-        return remote_addr or "unknown"
+        return resolve_client_ip(trusted_networks)
 
     def _sweep(now: float) -> None:
         """Định kỳ dọn các IP không còn request nào trong cửa sổ trượt để tránh rò rỉ bộ nhớ."""

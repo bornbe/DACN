@@ -254,7 +254,46 @@ Hệ thống được thiết kế theo mô hình Clean Architecture, tách bạ
 
 ---
 
-## 4. MA TRẬN PHÂN CÔNG & LỘ TRÌNH 4 TUẦN
+### 📌 MODULE 8: QUẢN TRỊ NỀN TẢNG, BẢO MẬT VẬN HÀNH & TRIỂN KHAI PRODUCTION (`okiaconpet.cloud`)
+*Phụ trách: Nguyễn Tiến Đức & Đặng Ngọc Huy (Mở rộng đáp ứng chuẩn Automated Pentest Platform)*
+
+#### 🎯 Issue #8.1: Phân quyền RBAC, Quản lý Target & Xác minh Quyền sở hữu + Audit Logging
+- **Mục tiêu:** Đảm bảo nền tảng chỉ kiểm thử các mục tiêu đã được xác minh quyền sở hữu và lưu vết đầy đủ mọi thao tác quản trị.
+- **Yêu cầu kỹ thuật:**
+  - **Phân quyền RBAC (`models/user.py`, `middleware/auth_middleware.py`, `controllers/admin_controller.py`):**
+    - Tách rõ hai vai trò: `admin` (Administrator) và `tester`/`pentester` (Security Tester) thông qua decorator `@require_role`.
+    - Cung cấp API quản trị: `GET /api/admin/users`, `PATCH /api/admin/users/<id>`, `GET /api/admin/audit-logs`.
+  - **Target Management & Ownership Verification (`models/scan_job.py`, `services/target_service.py`, `controllers/target_controller.py`):**
+    - Mở rộng `ScanTarget` với `owner_id`, `scope`, `authorization_status` (`PENDING`, `VERIFIED`, `APPROVED`, `REJECTED`), `verification_token`, `verification_method`.
+    - Hỗ trợ xác minh qua `WELL_KNOWN` (`/.well-known/pentest-verify.txt`), `DNS_TXT` (`_pentest-verify.<domain>`), hoặc Admin duyệt (`POST /api/targets/<id>/approve`).
+    - Khi bật `TARGET_VERIFICATION_REQUIRED=true`, `POST /api/scans` bắt buộc mục tiêu phải ở trạng thái `VERIFIED` hoặc `APPROVED`.
+  - **Audit Logging (`models/audit_log.py`, `services/audit_service.py`):**
+    - Ghi nhận các sự kiện `LOGIN_SUCCESS`, `LOGIN_FAILED`, `USER_REGISTER`, `TARGET_CREATE`, `TARGET_VERIFY`, `TARGET_APPROVE`, `TARGET_REJECT`, `SCAN_START`, `SCAN_STOP`, `REPORT_EXPORT`, `ADMIN_USER_UPDATE` và tự động lọc bỏ khóa nhạy cảm (`password`, `token`, `secret`).
+
+#### 🎯 Issue #8.2: So sánh Lịch sử Quét (Scan Diffing), Chuẩn hóa `source_tool` & Báo cáo HTML/JSON
+- **Mục tiêu:** Theo dõi diễn biến lỗ hổng qua các lần quét và mở rộng định dạng báo cáo chuẩn hóa.
+- **Yêu cầu kỹ thuật:**
+  - **Chuẩn hóa nguồn phát hiện (`source_tool`):** Bổ sung trường `source_tool` vào `Finding`, `VulnerabilityFinding` và API schema (`sqli_scanner`, `xss_scanner`, `csrf_scanner`, `headers_scanner`).
+  - **Scan History Diffing (`services/scan_service.py`, `controllers/scan_controller.py`):**
+    - Cung cấp API `GET /api/scans/compare?base=<id_a>&target=<id_b>` so sánh hai phiên quét theo khóa `(vuln_type, target_url, param)`, trả về `new_findings`, `fixed_findings`, `persistent_findings` và `severity_delta`.
+  - **Báo cáo đa định dạng (`models/report.py`, `services/report_service.py`, `controllers/report_controller.py`):**
+    - Mở rộng `GET /api/scans/<id>/report?format=pdf|html|json|docx|txt`.
+    - Báo cáo `HTML` tự động escape XSS và gắn header `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`; lưu lịch sử xuất báo cáo vào bảng `reports`.
+  - **Web Dashboard (`templates/`, `static/js/app.js`):** Tích hợp khu vực quản lý/xác minh `Targets`, giao diện so sánh 2 phiên quét, nút tải `HTML`/`JSON`, và bảng quản trị `Users & Audit Logs` cho Admin.
+
+#### 🎯 Issue #8.3: Bảo mật Cloudflare Tunnel, Chống Tự quét & Đóng gói Docker Compose
+- **Mục tiêu:** Triển khai nền tảng an toàn trên tên miền `https://okiaconpet.cloud` qua Cloudflare Tunnel (`cloudflared`).
+- **Yêu cầu kỹ thuật:**
+  - **Proxy & Rate Limiting (`app.py`, `middleware/rate_limiter.py`, `config/config.py`):**
+    - Áp dụng `_TrustedProxyFixMiddleware` (cập nhật `X-Forwarded-Proto`/`X-Forwarded-Host`) và ưu tiên đọc `CF-Connecting-IP` chỉ khi `REMOTE_ADDR` thuộc `TRUSTED_PROXIES`.
+    - Chống giả mạo IP khi client gọi trực tiếp ngoài allowlist.
+  - **Chống tự quét vòng lặp (`core/crawler/url_parser.py`):** Tự động loại trừ `/api/` và `/scans/` khỏi crawler khi mục tiêu trùng với `APP_BASE_URL` (`okiaconpet.cloud`), vẫn giữ nguyên hành vi kiểm thử cho Lab cục bộ.
+  - **Đóng gói & Triển khai (`Dockerfile`, `docker-compose.yml`, `Docs/DEPLOY_CLOUDFLARE_TUNNEL.md`):**
+    - Đóng gói `web` (Gunicorn `--workers 1 --threads 8`, non-root user, font Unicode DejaVu), `db` (PostgreSQL 16) và `cloudflared` kết nối tới `https://okiaconpet.cloud`.
+
+---
+
+## 4. MA TRẬN PHÂN CÔNG & LỘ TRÌNH THỰC HIỆN
 
 | Tuần | Nguyễn Tiến Đức | Đặng Ngọc Huy |
 | :---: | :--- | :--- |
@@ -262,3 +301,4 @@ Hệ thống được thiết kế theo mô hình Clean Architecture, tách bạ
 | **Tuần 2** | **Issue #3.1:** BaseScanner trừu tượng<br>**Issue #3.2:** Scanner Security Headers<br>**Issue #3.3:** Scanner Anti-CSRF Token | **Issue #3.4:** Scanner SQL Injection (Error & Boolean)<br>**Issue #3.5:** Scanner Reflected XSS |
 | **Tuần 3** | **Issue #4.1:** Core Engine Orchestrator & Dedup<br>**Issue #4.2:** Giao diện dòng lệnh CLI Terminal | **Issue #5.1:** Hệ thống Web API Flask + JWT<br>**Issue #5.2:** Hàng đợi tác vụ quét chạy ngầm |
 | **Tuần 4** | **Issue #6.2:** Module xuất báo cáo PDF / TXT<br>**Issue #7.1 & #7.2:** Benchmark với OWASP ZAP & Báo cáo | **Issue #6.1:** Web Dashboard Frontend (Bootstrap + Chart.js)<br>**Issue #7.1 & #7.2:** Benchmark với OWASP ZAP & Báo cáo |
+| **Tuần 5 (Mở rộng)** | **Issue #8.1:** RBAC, Target Verification & Audit Logs<br>**Issue #8.2:** Chuẩn hóa `source_tool` & HTML/JSON Report | **Issue #8.2:** Scan Diffing & Cập nhật Dashboard UI<br>**Issue #8.3:** Cloudflare Tunnel, Docker Compose & Self-Scan Guard |

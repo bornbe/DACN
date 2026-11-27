@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from schemas.auth_schema import validate_login, validate_register
+from services import audit_service
 from services.auth_service import authenticate, generate_token
 from services.user_service import create_user
 
@@ -31,8 +32,22 @@ def login() -> ResponseReturnValue:
     with _session_factory()() as db:
         user = authenticate(db, credentials["username"], credentials["password"])
         if user is None:
+            audit_service.record_audit_log(
+                db,
+                action="LOGIN_FAILED",
+                resource_type="auth",
+                metadata={"username": credentials["username"]},
+            )
             return jsonify(error="Unauthorized", message="Tên đăng nhập hoặc mật khẩu không đúng."), 401
         token = generate_token(user)
+        audit_service.record_audit_log(
+            db,
+            action="LOGIN_SUCCESS",
+            user_id=user.id,
+            resource_type="user",
+            resource_id=user.id,
+            metadata={"username": user.username, "role": user.role},
+        )
         return jsonify(access_token=token, token_type="Bearer", user=user.to_dict()), 200
 
 
@@ -50,4 +65,12 @@ def register() -> ResponseReturnValue:
         except IntegrityError:
             db.rollback()
             return jsonify(error="Conflict", message="Username hoặc email đã được sử dụng."), 409
+        audit_service.record_audit_log(
+            db,
+            action="USER_REGISTER",
+            user_id=user.id,
+            resource_type="user",
+            resource_id=user.id,
+            metadata={"username": user.username, "role": user.role},
+        )
         return jsonify(user=user.to_dict()), 201

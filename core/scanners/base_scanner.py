@@ -51,6 +51,7 @@ class Finding:
     cwe_id: str | None = None
     remediation: str | None = None
     owasp_category: str | None = None
+    source_tool: str | None = None
 
     def __post_init__(self) -> None:
         self.severity = (self.severity or "INFO").upper()
@@ -225,6 +226,7 @@ class BaseScanner(ABC):
         evidence: str | None = None,
         cwe_id: str | None = None,
         remediation: str | None = None,
+        source_tool: str | None = None,
     ) -> Finding:
         """Dựng Finding, tự điền severity/CWE/OWASP/remediation mặc định từ danh mục OWASP."""
         info = self._category_info()
@@ -238,4 +240,5 @@ class BaseScanner(ABC):
             cwe_id=cwe_id or info.get("cwe_id"),
             remediation=remediation or info.get("remediation"),
             owasp_category=info.get("owasp_id"),
+            source_tool=source_tool or f"{self.name}_scanner",
         )
