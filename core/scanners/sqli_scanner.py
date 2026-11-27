@@ -169,6 +169,22 @@ class SQLiScanner(BaseScanner):
                 and false_ratio <= FALSE_SIMILARITY_THRESHOLD
                 and true_ratio - false_ratio >= SIMILARITY_GAP_THRESHOLD
             ):
+                # Bước xác nhận lần 2 (Confirmation Probe) để loại bỏ nhiễu nội dung động nhất thời
+                confirm_true = self._send_values(url, method, true_params)
+                if confirm_true is None:
+                    return None, False
+                confirm_false = self._send_values(url, method, false_params)
+                if confirm_false is None:
+                    return None, False
+                c_true_ratio = difflib.SequenceMatcher(None, baseline_body, confirm_true.text).ratio()
+                c_false_ratio = difflib.SequenceMatcher(None, baseline_body, confirm_false.text).ratio()
+                if not (
+                    c_true_ratio >= TRUE_SIMILARITY_THRESHOLD
+                    and c_false_ratio <= FALSE_SIMILARITY_THRESHOLD
+                    and c_true_ratio - c_false_ratio >= SIMILARITY_GAP_THRESHOLD
+                ):
+                    continue
+
                 return self.make_finding(
                     vuln_name="SQL Injection (Boolean-based)",
                     target_url=url,
@@ -177,7 +193,8 @@ class SQLiScanner(BaseScanner):
                     payload=f"TRUE: {true_value} | FALSE: {false_value}",
                     evidence=(
                         "Phản hồi TRUE tương đồng với baseline "
-                        f"({true_ratio:.3f}); phản hồi FALSE khác biệt ({false_ratio:.3f})."
+                        f"({true_ratio:.3f}, confirm={c_true_ratio:.3f}); "
+                        f"phản hồi FALSE khác biệt ({false_ratio:.3f}, confirm={c_false_ratio:.3f})."
                     ),
                 ), True
         return None, True

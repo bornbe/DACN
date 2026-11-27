@@ -15,13 +15,21 @@ Hệ thống được thiết kế theo mô hình Clean Architecture, tách bạ
 
 ```
                       +---------------------------------------+
+                      |     CLOUDFLARE TUNNEL (cloudflared)   |
+                      |  [HTTPS / CF-Connecting-IP / ProxyFix]|
+                      +-------------------+-------------------+
+                                          |
+                      +-------------------v-------------------+
                       |           USER INTERFACES             |
                       |  [Web UI (Bootstrap/JS)]   [CLI Tool] |
                       +-------------------+-------------------+
                                           |
                       +-------------------v-------------------+
-                      |      WEB API & TASK QUEUE (Flask)     |
-                      |   - Auth / JWT  - Async Job Worker    |
+                      |  WEB API, RBAC & TASK QUEUE (Flask)   |
+                      |  - JWT & RBAC (Admin / Tester)        |
+                      |  - Target Ownership Verification      |
+                      |  - Scan Diffing & Multi-Format Report |
+                      |  - Async Single-Process Worker Queue  |
                       +-------------------+-------------------+
                                           |
                       +-------------------v-------------------+
@@ -30,7 +38,7 @@ Hệ thống được thiết kế theo mô hình Clean Architecture, tách bạ
                                 |                   |
                +----------------v-----+      +------v----------------+
                |  BFS CRAWLER ENGINE  |      |   VULNERABILITY       |
-               |  - Scope Filter      |      |   SCANNING MODULES    |
+               |  - Scope & Self-Scan |      |   SCANNING MODULES    |
                |  - Form/Param Parser |      |   - BaseScanner       |
                +----------------------+      |   - Security Headers  |
                                              |   - Anti-CSRF Token   |
@@ -40,8 +48,10 @@ Hệ thống được thiết kế theo mô hình Clean Architecture, tách bạ
                                                          |
                       +----------------------------------v----+
                       |    DATA LAYER & ENCRYPTION AT-REST    |
-                      |    - SQLAlchemy ORM                   |
-                      |    - AES-256 Field-level Encryption   |
+                      |    - PostgreSQL 16 / SQLite ORM       |
+                      |    - Users, Targets, Scans, Findings  |
+                      |    - Reports & Sanitized AuditLogs    |
+                      |    - AES-256-GCM Field Encryption     |
                       +---------------------------------------+
 ```
 

@@ -121,8 +121,13 @@ class BFSCrawler:
                 continue
             html, page_url = page
 
+            # Nếu redirect trong scope sang URL đích có query string, thu thập thêm endpoint GET từ URL đích
+            normalized_final = self.url_parser.normalize(page_url)
+            if normalized_final != current_url:
+                self._collect_query_endpoint(normalized_final, depth)
+
             # URL cuối sau chuyển hướng cũng được đánh dấu đã thăm để không tải lại
-            self.visited.add(self.url_parser.normalize(page_url))
+            self.visited.add(normalized_final)
 
             # 2) Bóc tách các form trong trang thành endpoint (dùng URL thật của trang để giải mã link tương đối)
             for endpoint in self.form_parser.parse_forms(html, page_url, depth):
